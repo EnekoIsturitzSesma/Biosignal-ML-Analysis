@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  jupyter_bci:
+    build: .
+    container_name: EEGNet-Motor-Imagery-BCI
+    ports:
+      - "8888:8888"
+      - "5000:5000"
+    volumes:
+      - .:/app
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
