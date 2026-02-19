@@ -7,7 +7,6 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=0.5, t_end=4.0):
     fs = int(raw.info['sfreq'])
     
     events, event_dict = mne.events_from_annotations(raw, verbose=False)
-    
 
     left_mne_id = event_dict.get('769', None) 
     right_mne_id = event_dict.get('770', None) 
@@ -60,16 +59,16 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=0.5, t_end=4.0):
     return data
 
 
-def load_all_subjects(data_dir):
+def load_all_subjects(data_dir, stage='T'):
     files = os.listdir(data_dir)
-    subject_ids = sorted(list(set([f[0:3] for f in files if f.endswith('T.gdf')])))
+    subject_ids = sorted(list(set([f[0:3] for f in files if f.endswith(f'{stage}.gdf')])))
     
     X_all = []
     y_all = []
     subject_all = []
     
     for subj_id in subject_ids:
-        gdf_file = f"{data_dir}/{subj_id}T.gdf"
+        gdf_file = f"{data_dir}/{subj_id}{stage}.gdf"
         
         if not os.path.exists(gdf_file):
             print(f"File not found: {gdf_file}")
