@@ -2,6 +2,8 @@ import mne
 import numpy as np
 import os
 
+mne.set_log_level('WARNING')
+
 def prepare_motor_imagery_dataset(gdf_file, t_start=0.5, t_end=4.0):
     raw = mne.io.read_raw_gdf(gdf_file, preload=True, verbose=False)
     fs = int(raw.info['sfreq'])
@@ -80,7 +82,6 @@ def load_all_subjects(data_dir, stage='T'):
             y_all.append(data['y'])
             subject_all.extend([subj_id] * len(data['y']))
             
-            print(f"{subj_id}: {len(data['y'])} loaded trials")
         except Exception as e:
             print(f"Error in {subj_id}: {e}")
     
