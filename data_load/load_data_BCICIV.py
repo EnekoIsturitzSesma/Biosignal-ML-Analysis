@@ -4,7 +4,7 @@ import os
 
 mne.set_log_level('WARNING')
 
-def prepare_motor_imagery_dataset(gdf_file, t_start=0.5, t_end=4.0):
+def prepare_motor_imagery_dataset(gdf_file, t_start=2.0, t_end=6.0):
     raw = mne.io.read_raw_gdf(gdf_file, preload=True, verbose=False)
     fs = int(raw.info['sfreq'])
     
@@ -18,14 +18,17 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=0.5, t_end=4.0):
     
     left_events = events[events[:, 2] == left_mne_id]
     right_events = events[events[:, 2] == right_mne_id]
+    print("channels:", raw.ch_names)
     
     print(f"Loaded file: {gdf_file}")
     
-    channels_to_use = list(range(22))
+    channels_to_use = ['EEG-0', 'EEG-4', 'EEG-5', 'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7','EEG-C4', 'EEG-8', 'EEG-9', 'EEG-13']
     
     n_samples_trial = int((t_end - t_start) * fs)
     start_idx = int(t_start * fs)
     
+    #raw.filter(8, 35, fir_design='firwin', verbose=False)
+
     signal = raw.get_data(picks=channels_to_use)
     
     X_list = []
@@ -36,7 +39,7 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=0.5, t_end=4.0):
         trial_end = trial_start + n_samples_trial
         
         if trial_end <= signal.shape[1]:
-            X_list.append(signal[:, trial_start:trial_end].T)
+            X_list.append(signal[:, trial_start:trial_end])
             y_list.append(0)
     
     for event_pos in right_events[:, 0]:
@@ -44,7 +47,7 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=0.5, t_end=4.0):
         trial_end = trial_start + n_samples_trial
         
         if trial_end <= signal.shape[1]:
-            X_list.append(signal[:, trial_start:trial_end].T)
+            X_list.append(signal[:, trial_start:trial_end])
             y_list.append(1)
     
     X = np.array(X_list) 
