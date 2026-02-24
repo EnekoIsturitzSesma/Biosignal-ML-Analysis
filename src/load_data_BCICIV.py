@@ -18,7 +18,6 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=2.0, t_end=6.0):
     
     left_events = events[events[:, 2] == left_mne_id]
     right_events = events[events[:, 2] == right_mne_id]
-    print("channels:", raw.ch_names)
     
     print(f"Loaded file: {gdf_file}")
     
@@ -27,7 +26,7 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=2.0, t_end=6.0):
     n_samples_trial = int((t_end - t_start) * fs)
     start_idx = int(t_start * fs)
     
-    #raw.filter(8, 35, fir_design='firwin', verbose=False)
+    raw.filter(7, 30, fir_design='firwin', verbose=False)
 
     signal = raw.get_data(picks=channels_to_use)
     
