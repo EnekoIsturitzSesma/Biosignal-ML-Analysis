@@ -30,3 +30,17 @@ def channel_aggregation(X, use_multiband=False):
 
     return aggregated
 
+
+def normalize_trial(X):
+
+    if X.ndim == 3:
+        mean = np.mean(X, axis=2, keepdims=True)
+        std = np.std(X, axis=2, keepdims=True)
+    elif X.ndim == 2:
+        mean = np.mean(X, axis=1, keepdims=True)
+        std = np.std(X, axis=1, keepdims=True)
+
+    normalized = (X - mean) / (std + 1e-8)
+
+    return normalized
+
