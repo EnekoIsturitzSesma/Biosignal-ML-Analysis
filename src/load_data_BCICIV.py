@@ -4,7 +4,7 @@ import os
 
 mne.set_log_level('WARNING')
 
-def prepare_motor_imagery_dataset(gdf_file, t_start=2.0, t_end=6.0):
+def prepare_motor_imagery_dataset(gdf_file, t_start=2.0, t_end=6.0, channels_to_use=None):
     raw = mne.io.read_raw_gdf(gdf_file, preload=True, verbose=False)
     fs = int(raw.info['sfreq'])
     
@@ -21,7 +21,10 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=2.0, t_end=6.0):
     
     print(f"Loaded file: {gdf_file}")
     
-    channels_to_use = ['EEG-0', 'EEG-4', 'EEG-5', 'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7','EEG-C4', 'EEG-8', 'EEG-9', 'EEG-13']
+    if channels_to_use is None:
+        channels_to_use = ['EEG-0', 'EEG-4', 'EEG-5', 'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7','EEG-C4', 'EEG-8', 'EEG-9', 'EEG-13']
+    elif channels_to_use == 'all':
+        channels_to_use = ['EEG-Fz', 'EEG-0', 'EEG-1', 'EEG-2', 'EEG-3', 'EEG-4', 'EEG-5', 'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7', 'EEG-C4', 'EEG-8', 'EEG-9', 'EEG-10', 'EEG-11', 'EEG-12', 'EEG-13', 'EEG-14', 'EEG-Pz', 'EEG-15', 'EEG-16']
     
     n_samples_trial = int((t_end - t_start) * fs)
     start_idx = int(t_start * fs)
@@ -63,7 +66,7 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=2.0, t_end=6.0):
     return data
 
 
-def prepare_motor_imagery_dataset_multiband(gdf_file, t_start=2.0, t_end=6.0, bands=[(8, 12), (13, 30)]):
+def prepare_motor_imagery_dataset_multiband(gdf_file, t_start=2.0, t_end=6.0, bands=[(8, 12), (13, 30)], channels_to_use=None):
     raw = mne.io.read_raw_gdf(gdf_file, preload=True, verbose=False)
     fs = int(raw.info['sfreq'])
     
@@ -77,7 +80,10 @@ def prepare_motor_imagery_dataset_multiband(gdf_file, t_start=2.0, t_end=6.0, ba
     left_events = events[events[:, 2] == left_mne_id]
     right_events = events[events[:, 2] == right_mne_id]
 
-    channels_to_use = ['EEG-0', 'EEG-4', 'EEG-5', 'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7','EEG-C4', 'EEG-8', 'EEG-9', 'EEG-13']
+    if channels_to_use is None:
+        channels_to_use = ['EEG-0', 'EEG-4', 'EEG-5', 'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7','EEG-C4', 'EEG-8', 'EEG-9', 'EEG-13']
+    elif channels_to_use == 'all':
+        channels_to_use = ['EEG-Fz', 'EEG-0', 'EEG-1', 'EEG-2', 'EEG-3', 'EEG-4', 'EEG-5', 'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7', 'EEG-C4', 'EEG-8', 'EEG-9', 'EEG-10', 'EEG-11', 'EEG-12', 'EEG-13', 'EEG-14', 'EEG-Pz', 'EEG-15', 'EEG-16']
     raw.pick(channels_to_use)
     
     n_samples_trial = int((t_end - t_start) * fs)
@@ -126,7 +132,7 @@ def prepare_motor_imagery_dataset_multiband(gdf_file, t_start=2.0, t_end=6.0, ba
     return data
 
 
-def load_all_subjects(data_dir, stage='T', use_multiband=False, bands=[(8, 12), (13, 30)]):
+def load_all_subjects(data_dir, stage='T', use_multiband=False, bands=[(8, 12), (13, 30)], channels_to_use=None):
     files = os.listdir(data_dir)
     subject_ids = sorted(list(set([f[0:3] for f in files if f.endswith(f'{stage}.gdf')])))
     
@@ -143,9 +149,9 @@ def load_all_subjects(data_dir, stage='T', use_multiband=False, bands=[(8, 12), 
         
         try:
             if use_multiband:
-                data = prepare_motor_imagery_dataset_multiband(gdf_file, bands=bands)
+                data = prepare_motor_imagery_dataset_multiband(gdf_file, bands=bands, channels_to_use=channels_to_use)
             else:
-                data = prepare_motor_imagery_dataset(gdf_file)
+                data = prepare_motor_imagery_dataset(gdf_file, channels_to_use=channels_to_use)
             X_all.append(data['X'])
             y_all.append(data['y'])
             subject_all.extend([subj_id] * len(data['y']))
