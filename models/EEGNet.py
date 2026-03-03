@@ -34,6 +34,8 @@ class EEGNet(nn.Module):
         # layer 1
         y = self.TemporalConv(x)
         y = self.BatchNorm1(y)
+        y = self.Elu(y)
+        y = self.Dropout(y)
 
         # layer 2
         y = self.DepthSpatialConv(y)
