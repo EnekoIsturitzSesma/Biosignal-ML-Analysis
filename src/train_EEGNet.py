@@ -58,14 +58,14 @@ class EEGDataset(Dataset):
 
             x = np.concatenate(processed_bands, axis=0)
 
-
-        if 'mu_band' in self.transforms:
-            x = x[0]
-        
-        if 'laplacian' in self.transforms:
-            x = np.expand_dims(x, axis=0)
-            x = laplacian_filter(x, self.channels_laplace, [self.c3_neighbours, self.c4_neighbours])
-            x = x.squeeze(0)
+        else:
+            if 'mu_band' in self.transforms:
+                x = x[0]
+            
+            if 'laplacian' in self.transforms:
+                x = np.expand_dims(x, axis=0)
+                x = laplacian_filter(x, self.channels_laplace, [self.c3_neighbours, self.c4_neighbours])
+                x = x.squeeze(0)
 
         x = normalize_trial(x)
         x = torch.tensor(x, dtype=torch.float32)
@@ -180,6 +180,10 @@ def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=2
         _, channels, samples = X.shape
     else:
         _, _, channels, samples = X.shape
+
+    if 'multiband' in transforms:
+        channels = channels * 2
+
 
     logo = LeaveOneGroupOut()
     logo.get_n_splits(groups=subjects)
