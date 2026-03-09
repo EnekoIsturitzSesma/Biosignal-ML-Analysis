@@ -82,6 +82,18 @@ def apply_max_norm(model, max_val=1.0):
                 param.data.copy_(torch.renorm(param.data, p=2, dim=0, maxnorm=max_val))
 
 
+def init_weights_xavier(m):
+    if isinstance(m, nn.Conv2d):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+            
+    elif isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+
+
 def trainning_loop(model, train_dl, val_dl, epochs=100, lr=0.0005, patience=20):
 
     criterion = nn.CrossEntropyLoss()
@@ -147,6 +159,7 @@ def trainning_loop(model, train_dl, val_dl, epochs=100, lr=0.0005, patience=20):
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
+            best_train_acc = train_acc
             best_model_state = model.state_dict()
             patience_counter = 0
         else:
@@ -159,19 +172,7 @@ def trainning_loop(model, train_dl, val_dl, epochs=100, lr=0.0005, patience=20):
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
-    return model, best_val_acc
-
-
-def init_weights_xavier(m):
-    if isinstance(m, nn.Conv2d):
-        nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
-            
-    elif isinstance(m, nn.Linear):
-        nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
+    return model, best_train_acc, best_val_acc
 
 
 def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=20):
@@ -183,6 +184,8 @@ def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=2
 
     if 'multiband' in transforms:
         channels = channels * 2
+
+    models_per_subject = [] 
 
 
     logo = LeaveOneGroupOut()
@@ -203,47 +206,12 @@ def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=2
         model = model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
         model.apply(init_weights_xavier)
 
-        trained_model, test_subject_accuracy = trainning_loop(model, train_dl, test_dl, epochs=epochs, lr=lr, patience=patience)
+        trained_model, train_subject_accuracy, test_subject_accuracy = trainning_loop(model, train_dl, test_dl, epochs=epochs, lr=lr, patience=patience)
         test_subject_accuracies.append(test_subject_accuracy)
-        print(f"Fold {i+1}: Test Accuracy: {test_subject_accuracy:.4f}")
+        models_per_subject.append(trained_model)
+        print(f"Fold {i+1}: Train Acc = {train_subject_accuracy} | Test Acc = {test_subject_accuracy:.4f}")
 
     print(f"Mean Subject Accuracy: {np.mean(test_subject_accuracies):.4f}")
     print(f"Standard Deviation: {np.std(test_subject_accuracies):.4f}")
 
-    final_dataset = EEGDataset(X, y, transforms=transforms)
-
-    train_size = int(0.9 * len(final_dataset))
-    val_size = len(final_dataset) - train_size
-
-    final_train_subset, final_val_subset = torch.utils.data.random_split(final_dataset,[train_size, val_size])
-
-    final_train_dl = DataLoader(final_train_subset, batch_size=32, shuffle=True)
-    final_val_dl = DataLoader(final_val_subset, batch_size=32, shuffle=False)
-
-    model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
-    model.apply(init_weights_xavier)
-
-    final_model, _ = trainning_loop(model, final_train_dl, final_val_dl, epochs=epochs, lr=lr, patience=patience)
-
-    return final_model, test_subject_accuracies
-
-
-
-def evaluate_model(model, X_test, y_test, transforms):
-
-    test_dataset = EEGDataset(X_test, y_test, transforms=transforms)
-    dataloader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-
-    model.eval()
-    correct = 0
-    total = 0
-    
-    with torch.no_grad():
-        for inputs, labels in dataloader:
-            inputs, labels = inputs.to(next(model.parameters()).device), labels.to(next(model.parameters()).device)
-            outputs = model(inputs)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-    
-    return correct / total
+    return models_per_subject, test_subject_accuracies
