@@ -19,17 +19,14 @@ This repository implements and evaluates EEG-based motor imagery classification 
 - `src/train_EEGNet.py`: EEGNet training and evaluation
 - `models/EEGNet.py`: EEGNet architecture definition
 - `notebooks/`: exploratory analysis, training experiments, visualization
-- `figures/`: generated figures (optional)
+- `figures/`: generated figures
 
 ## Requirements
 
 Use a Python virtual environment (`venv`) to isolate dependencies and ensure reproducibility. This project uses `pyproject.toml` and `uv.lock` for dependency management.
 
 ```bash
-python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
-pip install uv
 uv sync
 ```
 
