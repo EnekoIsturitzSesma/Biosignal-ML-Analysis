@@ -1,26 +1,39 @@
 from sklearn.model_selection import GridSearchCV, LeaveOneGroupOut
 import numpy as np
+import mlflow
+import mlflow.sklearn
 
-def train_CSP(X, y, subjects, pipeline, param_grid):
+def train_CSP(X, y, subjects, pipeline, param_grid, run_name):
 
-    loso = LeaveOneGroupOut()
-    grid_search = GridSearchCV(estimator=pipeline, param_grid=param_grid, cv=loso, scoring='accuracy', n_jobs=1, refit=True, return_train_score=True)
+    mlflow.set_experiment('BCI_CSP')
 
-    grid_search.fit(X, y, groups=subjects)
+    with mlflow.start_run(run_name=run_name):
 
-    results = grid_search.cv_results_
-    n_splits = loso.get_n_splits(groups=subjects)
+        loso = LeaveOneGroupOut()
+        grid_search = GridSearchCV(estimator=pipeline, param_grid=param_grid, cv=loso, scoring='accuracy', n_jobs=1, refit=True, return_train_score=True)
 
-    unique_subjets = np.unique(subjects)
+        grid_search.fit(X, y, groups=subjects)
 
-    print("\n Results per fold (best hyperparameters):")
-    best_idx = grid_search.best_index_
+        results = grid_search.cv_results_
+        n_splits = loso.get_n_splits(groups=subjects)
 
-    for i in range(n_splits):
-        train_score = results[f'split{i}_train_score'][best_idx]
-        test_score = results[f'split{i}_test_score'][best_idx] 
+        unique_subjets = np.unique(subjects)
 
-        print(f'Subject {unique_subjets[i]}: Train Acc = {train_score:.4f} | Val Acc = {test_score:.4f}') 
+        print("\n Results per fold (best hyperparameters):")
+        best_idx = grid_search.best_index_
+
+        for i in range(n_splits):
+            train_score = results[f'split{i}_train_score'][best_idx]
+            test_score = results[f'split{i}_test_score'][best_idx] 
+
+            mlflow.log_metric(f'subject_{unique_subjets[i]}_train_accuracy', train_score)
+            mlflow.log_metric(f'subject_{unique_subjets[i]}_test_accuracy', test_score)
+
+            print(f'Subject {unique_subjets[i]}: Train Acc = {train_score:.4f} | Val Acc = {test_score:.4f}') 
+
+        mlflow.log_params(grid_search.best_params_)
+        mlflow.log_metric("cv_accuracy", grid_search.best_score_)
+        mlflow.sklearn.log_model(grid_search.best_estimator_, artifact_path="model")
 
     return grid_search.best_estimator_, grid_search.best_params_, grid_search.best_score_
 

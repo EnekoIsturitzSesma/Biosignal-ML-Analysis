@@ -1,0 +1,17 @@
+[project]
+name = "eeg-bci-project"
+version = "1.0.0"
+description = "BCI motor imagery classification with EEGNet and CSP"
+requires-python = ">=3.11"
+
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "matplotlib",
+    "pandas",
+    "torch",
+    "tqdm",
+    "mlflow",
+    "mne"
+]

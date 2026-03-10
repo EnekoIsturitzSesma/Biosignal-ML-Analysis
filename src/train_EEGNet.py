@@ -4,6 +4,8 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from sklearn.model_selection import LeaveOneGroupOut
 from tqdm import tqdm
+import mlflow
+import mlflow.pytorch
 
 import sys
 import os
@@ -187,31 +189,52 @@ def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=2
 
     models_per_subject = [] 
 
+    run_name = f"EEGNet_{channels}_{'_'.join(transforms) if transforms else 'raw'}"
 
-    logo = LeaveOneGroupOut()
-    logo.get_n_splits(groups=subjects)
+    mlflow.set_experiment('BCI_EEGNet')
 
-    test_subject_accuracies = []
+    with mlflow.start_run(run_name=run_name):
 
-    for i, (train_index, test_index) in enumerate(logo.split(X, y, subjects)):
-        X_train, X_test = X[train_index], X[test_index]
-        y_train, y_test = y[train_index], y[test_index]
+        mlflow.log_param("epochs", epochs)
+        mlflow.log_param("lr", lr)
+        mlflow.log_param("patience", patience)
+        mlflow.log_param("transforms", transforms)
 
-        train_dataset = EEGDataset(X_train, y_train, transforms=transforms)
-        test_dataset = EEGDataset(X_test, y_test, transforms=transforms)
+        logo = LeaveOneGroupOut()
+        logo.get_n_splits(groups=subjects)
 
-        train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True)
-        test_dl = DataLoader(test_dataset, batch_size=32, shuffle=False)
+        test_subject_accuracies = []
 
-        model = model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
-        model.apply(init_weights_xavier)
+        for i, (train_index, test_index) in enumerate(logo.split(X, y, subjects)):
+            X_train, X_test = X[train_index], X[test_index]
+            y_train, y_test = y[train_index], y[test_index]
 
-        trained_model, train_subject_accuracy, test_subject_accuracy = trainning_loop(model, train_dl, test_dl, epochs=epochs, lr=lr, patience=patience)
-        test_subject_accuracies.append(test_subject_accuracy)
-        models_per_subject.append(trained_model)
-        print(f"Fold {i+1}: Train Acc = {train_subject_accuracy} | Test Acc = {test_subject_accuracy:.4f}")
+            train_dataset = EEGDataset(X_train, y_train, transforms=transforms)
+            test_dataset = EEGDataset(X_test, y_test, transforms=transforms)
 
-    print(f"Mean Subject Accuracy: {np.mean(test_subject_accuracies):.4f}")
-    print(f"Standard Deviation: {np.std(test_subject_accuracies):.4f}")
+            train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True)
+            test_dl = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+            model = model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
+            model.apply(init_weights_xavier)
+
+            trained_model, train_subject_accuracy, test_subject_accuracy = trainning_loop(model, train_dl, test_dl, epochs=epochs, lr=lr, patience=patience)
+            test_subject_accuracies.append(test_subject_accuracy)
+            models_per_subject.append(trained_model)
+            print(f"Fold {i+1}: Train Acc = {train_subject_accuracy} | Test Acc = {test_subject_accuracy:.4f}")
+
+            subject = subjects[test_index][0]
+
+            mlflow.log_metric(f'subject_{subject}_train_accuracy', train_subject_accuracy)
+            mlflow.log_metric(f'subject_{subject}_test_accuracy', test_subject_accuracy)
+            mlflow.pytorch.log_model(trained_model, artifact_path=f'model_subject_{subject}')
+
+        mean_acc = np.mean(test_subject_accuracies)
+        std_acc = np.std(test_subject_accuracies)
+        print(f"Mean Subject Accuracy: {mean_acc:.4f}")
+        print(f"Standard Deviation: {std_acc:.4f}")
+
+        mlflow.log_metric('mean_accuracy', mean_acc)
+        mlflow.log_metric('std_accuracy', std_acc)
 
     return models_per_subject, test_subject_accuracies
