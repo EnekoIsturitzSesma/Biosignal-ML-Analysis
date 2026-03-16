@@ -215,7 +215,7 @@ def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=2
             train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True)
             test_dl = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-            model = model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
+            model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
             model.apply(init_weights_xavier)
 
             trained_model, train_subject_accuracy, test_subject_accuracy = trainning_loop(model, train_dl, test_dl, epochs=epochs, lr=lr, patience=patience)

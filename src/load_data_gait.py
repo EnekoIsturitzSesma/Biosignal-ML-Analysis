@@ -207,16 +207,25 @@ def load_dataset_gait(base_path, window_size=100, stride=25):
                     trial_metadata = trial['metadata'] 
 
                     X_trial = trial['data_processed'] 
-                    y_trial = np.zeros(X_trial.shape[0])
+                    X_raw = pd.DataFrame(X_trial)
+                    
+                    X_clean = X_raw.dropna(how='any').to_numpy()
+                    
+                    if len(X_clean) < window_size:
+                        continue
+
+                    y_trial = np.zeros(X_clean.shape[0])
 
                     for start, end in trial_metadata['leftGaitEvents']:
-                        y_trial[start:end] = 1 
+                        actual_end = min(end, X_clean.shape[0])
+                        y_trial[start:actual_end] = 1 
 
                     for start, end in trial_metadata['rightGaitEvents']:
-                        y_trial[start:end] = 2
+                        actual_end = min(end, X_clean.shape[0])
+                        y_trial[start:actual_end] = 2
 
-                    for start in range(0, X_trial.shape[0] - window_size + 1, stride):
-                        X_all.append(X_trial[start:start+window_size])
+                    for start in range(0, X_clean.shape[0] - window_size + 1, stride):
+                        X_all.append(X_clean[start:start+window_size])
                         y_all.append(y_trial[start:start+window_size])
                         groups.append(subject)
 
