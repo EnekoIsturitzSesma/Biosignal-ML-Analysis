@@ -155,8 +155,8 @@ def train_model_cv(X, y, subjects, epochs=100, lr=0.0003, patience=20):
         train_dataset = LSTMGaitDataset(X_train, y_train)
         test_dataset = LSTMGaitDataset(X_test, y_test)
 
-        train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True)
-        test_dl = DataLoader(test_dataset, batch_size=32, shuffle=False)
+        train_dl = DataLoader(train_dataset, batch_size=128, shuffle=True)
+        test_dl = DataLoader(test_dataset, batch_size=128, shuffle=False)
 
         model = LSTMGait(num_channels, num_classes, hidden_size=128, num_layers=2, dropout_rate=0.25)
 

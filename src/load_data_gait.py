@@ -189,7 +189,7 @@ def load_metadata(trial_path):
     return metadata
 
 
-def load_dataset_gait(base_path, window_size=100, stride=25):
+def load_dataset_gait(base_path, process="raw", window_size=100, stride=25):
 
     structure = load_bdd(base_path)
 
@@ -206,8 +206,14 @@ def load_dataset_gait(base_path, window_size=100, stride=25):
                     trial = load_trial(base_path, trial_name)
                     trial_metadata = trial['metadata'] 
 
-                    X_trial = trial['data_processed'] 
-                    X_raw = pd.DataFrame(X_trial)
+                    if process == "preprocessed":
+                        X_trial = trial['data_processed'] 
+                        X_raw = pd.DataFrame(X_trial)
+                    elif process == "raw":
+                        X_trial = trial['data_raw'] 
+                        X_raw = pd.concat([df.add_prefix(f"{key}_") for key, df in X_trial.items()], axis=1)
+                    else:
+                        print(f"{process} is not a valid keyword for parameter process")
                     
                     X_clean = X_raw.dropna(how='any').to_numpy()
                     
@@ -234,4 +240,5 @@ def load_dataset_gait(base_path, window_size=100, stride=25):
     groups = np.array(groups)
 
     return X_all, y_all, groups
+
 
