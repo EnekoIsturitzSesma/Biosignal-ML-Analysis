@@ -235,6 +235,7 @@ def load_dataset_gait(base_path, process="raw", window_size=100, stride=25):
                         y_all.append(y_trial[start:start+window_size])
                         groups.append(subject)
 
+
     X_all = np.stack(X_all)
     y_all = np.stack(y_all)
     groups = np.array(groups)

@@ -2,6 +2,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib import patches
+import pandas as pd
+
+import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join('..')))
+
+from src.load_data_gait import *
 
 
 def plot_segmentation_gait_events(trial):
@@ -212,4 +220,57 @@ def plot_segmentation(trial):
     ax[1].set(ylabel='Phases')
     ax[1].set_yticks([])
 
+    plt.show()
+
+
+def find_intervals(pred, val):
+  intervals = []
+  in_interval = False
+
+  for i, v in enumerate(pred):
+    if v == val and not in_interval:
+      start = i
+      in_interval = True
+    elif v != val and in_interval:
+      end = i
+      intervals.append((start, end))
+      in_interval = False
+
+  if in_interval:
+    intervals.append((start, len(pred)))
+
+  return intervals
+
+
+def plot_gait_detection(y, trial, path, title, sensor='LB', signal_channel='ACC_Z', process='raw'):
+
+    if process == 'raw':
+        signal = pd.read_csv(f'{path}/{trial}_{process}_data_{sensor}.txt', sep='\t')
+    elif process == 'processed':
+        signal = pd.read_csv(f'{trial}_{process}_data.txt', sep='\t')
+
+    print(signal.columns)
+    data_plot = signal[[signal_channel]]
+
+    right_intervals = find_intervals(y, 2)
+    left_intervals = find_intervals(y, 1)
+    gaps = find_intervals(y, 0)
+
+    plt.figure(figsize=(20,4))
+
+    for interval in right_intervals:
+        plt.axvspan(interval[0], interval[1], color="red", alpha=0.3)
+    for interval in left_intervals:
+        plt.axvspan(interval[0], interval[1], color="green", alpha=0.3)
+    for gap in gaps:
+        plt.axvspan(gap[0], gap[1], color="blue", alpha=0.1)
+
+    plt.plot(data_plot, color='black')
+
+    red_patch = mpatches.Patch(color="red", alpha=0.3, label="Right gait")
+    green_patch = mpatches.Patch(color="green", alpha=0.3, label="Left gait")
+    blue_patch = mpatches.Patch(color="blue", alpha=0.1, label="No gait")
+
+    plt.legend(handles=[red_patch, green_patch, blue_patch])
+    plt.title(title)
     plt.show()
