@@ -214,4 +214,9 @@ mlflow.db
 # Datasets
 datasets/
 
+# Model Checkpoints
+checkpoints/
+
+
+
 
