@@ -79,12 +79,12 @@ class EEGDataset(Dataset):
         return x, y
 
     def _augment(self, x):
-        if np.random.rand() < 0.5:
-            x = x + np.random.normal(0, 0.05, x.shape).astype(np.float32)
-        if np.random.rand() < 0.5:
-            x = x * np.random.uniform(0.8, 1.2)
         if np.random.rand() < 0.3:
-            shift = np.random.randint(-10, 10)
+            x = x + np.random.normal(0, 0.02, x.shape).astype(np.float32)
+        if np.random.rand() < 0.3:
+            x = x * np.random.uniform(0.92, 1.08)
+        if np.random.rand() < 0.2:
+            shift = np.random.randint(-3, 3)
             x = np.roll(x, shift, axis=-1)
         if np.random.rand() < 0.2:
             ch = np.random.randint(0, x.shape[0])
@@ -149,8 +149,8 @@ def training_loop(model, train_dl, epochs=100, lr=0.0005, patience=20, subject=N
         train_loss /= len(train_dl.dataset)
         train_acc   = train_correct / len(train_dl.dataset)
 
-        mlflow.log_metric(f"train_loss_{subject}_{epochs}", train_loss, step=epoch)
-        mlflow.log_metric(f"train_acc_{subject}_{epochs}",  train_acc,  step=epoch)
+        mlflow.log_metric(f"train_loss_{subject}", train_loss, step=epoch)
+        mlflow.log_metric(f"train_acc_{subject}",  train_acc,  step=epoch)
  
         scheduler.step(train_loss)
  
@@ -206,7 +206,7 @@ def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=2
  
     models_per_subject = []
 
-    run_name = f"EEGNet_{channels}_{'_'.join(transforms)}_{f'aug_{epochs}' if augment else 'noaug'}"
+    run_name = f"EEGNet_{channels}_{'_'.join(transforms)}_{'aug' if augment else 'noaug'}"
  
     mlflow.set_experiment('BCI_EEGNet')
  
