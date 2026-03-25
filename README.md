@@ -1,37 +1,38 @@
 # Biosignal ML Analysis
 
 ## Overview
-This repository focuses on analyzing biosignals through various methodologies, with an emphasis on Machine Learning. The toolset encompasses a range of functionalities catering to different types of signal analysis, notably EEG and LSTM gait analysis.
+This repository is dedicated to the analysis of biosignal data, implementing various functionalities related to machine learning and signal processing for applications such as EEG analysis and gait analysis.
 
 ## Functionalities
 
-### EEG Analysis
-- **Description:** This module facilitates the analysis of electroencephalogram (EEG) data to extract meaningful information regarding brain activity.
-- **Key Features:**
-  - Signal pre-processing (filtering, normalization)
-  - Feature extraction (time-domain, frequency-domain)
-  - Visualization tools (spectrograms, time series)
-- **Usage:** Run `eeg_analysis.py` with your dataset to obtain analysis results.
+### CSP Classifier
+- **Description:** Implements the Common Spatial Patterns (CSP) algorithm for feature extraction from EEG signals.
+- **Usage:** Provides methods to apply CSP on EEG datasets, enhancing the ability to classify mental states.
 
-### LSTM Gait Analysis
-- **Description**: Implements Long Short-Term Memory (LSTM) networks for analyzing gait patterns.
-- **Key Features**: 
-  - Data collection from motion sensors
-  - LSTM network training and evaluation
-  - Visualization of gait patterns and predictions
-- **Usage**: Utilize `lstm_gait_analysis.ipynb` for a step-by-step analysis framework.
+### EEGNet
+- **Description:** A hybrid deep learning architecture designed specifically for decoding EEG signals.
+- **Features:** 
+  - Efficient in handling temporal and spatial dimensions of EEG data.
+  - Capable of working with small datasets.
 
-## Notebooks and Source Modules
-- **Notebooks:**
-  - `eeg_notebook.ipynb`: Interactive analysis of EEG data.
-  - `gait_analysis_notebook.ipynb`: Step-by-step LSTM implementation.
+### GAIT Analysis
+- **Description:** Tools and methodologies for analyzing gait patterns using biosignal data.
+- **Applications:** Useful in rehabilitation and sports science for assessing movement patterns.
 
-- **Source Modules:**
-  - `eeg_analysis.py`: Contains functions for EEG signal processing.
-  - `lstm_gait_analysis.py`: Contains functions for LSTM training and evaluation.
+## Source Modules
+- `csp_classifier.py`: Implements the CSP algorithm.
+- `eegnet.py`: Contains the EEGNet architecture.
+- `gait_analysis.py`: Offers functionalities for gait analysis.
 
 ## Installation
-Follow the instructions in the repository to set up the necessary environment, including libraries and dependencies to run the analyses.
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/EnekoIsturitzSesma/Biosignal-ML-Analysis.git
+   ```
+2. Install the required packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-## Contributions
-For contributions and feature requests, please open an issue or submit a pull request. Your feedback is much appreciated!
+## Usage
+Refer to the respective module documentation for detailed usage instructions. 
