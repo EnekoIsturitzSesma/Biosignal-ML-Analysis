@@ -1,73 +1,51 @@
-# EEGNet-Motor-Imagery-BCI
-
-Development and evaluation of EEGNet-based architectures for motor imagery classification in Brain–Computer Interfaces (BCI).
-
-## Project Overview
-
-This repository implements and evaluates EEG-based motor imagery classification models using state-of-the-art deep learning (EEGNet) and classical pipelines (CSP + traditional classifier).
-
-- Main dataset: BCIC IV 2a (GDF)
-- Models: EEGNet (PyTorch) and CSP + classifier (LDA/SVM)
-- Goal: compare performance and establish a reproducible workflow
+# Biosignal ML Analysis
 
 ## Repository Structure
-
-- `datasets/BCICIV_2a_gdf/`: GDF training and test files (A01..A09)
-- `src/load_data_BCICIV.py`: data loading and dataset assembly
-- `src/preprocess.py`: filtering, epoching, and transformations
-- `src/train_CSP.py`: CSP pipeline + classifier training/evaluation
-- `src/train_EEGNet.py`: EEGNet training and evaluation
-- `models/EEGNet.py`: EEGNet architecture definition
-- `notebooks/`: exploratory analysis, training experiments, visualization
-- `figures/`: generated figures
-
-## Requirements
-
-Use a Python virtual environment (`venv`) to isolate dependencies and ensure reproducibility. This project uses `pyproject.toml` and `uv.lock` for dependency management.
-
-```bash
-source .venv/bin/activate
-uv sync
+```plaintext
+Biosignal-ML-Analysis/
+├── src/                      # Source code for the project
+│   ├── module1/             # Functionality of Module 1
+│   ├── module2/             # Functionality of Module 2
+│   └── ...
+├── tests/                    # Unit and Integration tests
+├── notebooks/                # Jupyter notebooks for examples
+├── data/                     # Sample data files
+└── .gitignore                # Git ignore file
 ```
 
-Key dependencies are declared in `pyproject.toml` and locked in `uv.lock`.
+## Functionalities and Tasks
 
-Main dependencies include:
-- numpy
-- scipy
-- mne
-- torch
-- torchvision
-- scikit-learn
-- matplotlib
+### Module 1
+- **Description**: This module handles ...
+- **Functions**: 
+  - `functionA`: Does ...
+  - `functionB`: Does ...
 
-## Notebooks
+### Module 2
+- **Description**: This module handles ...
+- **Functions**:
+  - `functionC`: Does ...
+  - `functionD`: Does ...
 
-- `notebooks/EEGNet.ipynb`: EDA and EEGNet training
-- `notebooks/CSP_Classifier.ipynb`: CSP + classifier pipeline
-- `notebooks/visualization.ipynb`: signal visualizations and confusion matrices
+### Additional Tasks
+- Task 1: Description...
+- Task 2: Description...
 
-## Pipeline Details
+## Installation Instructions
 
-### Data loading
-- `src/load_data_BCICIV.py` reads `.gdf` files, extracts events, and builds motor imagery epochs.
+To set up the project, follow these steps:
 
-### Preprocessing
-- Bandpass filtering (7-30 Hz)
-- Normalization
-- Laplacian filter
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/EnekoIsturitzSesma/Biosignal-ML-Analysis.git
+   cd Biosignal-ML-Analysis
+   ```
 
-### Models
-- `models/EEGNet.py`: 2D convolutional block, depthwise conv, separable conv, batch norm, dropout
-- Loss: CrossEntropyLoss
-- Optimizer: Adam
+2. Install the dependencies using `uv sync`:
+   ```bash
+   uv sync 
+   ```
 
-## Metrics & Evaluation
+3. Ensure that you have `pyproject.toml` in the root directory for package details.
 
-- Accuracy
-- Per subject cross-validation (Leave One Subject Out)
-
-## Contact
-
-- Author: Eneko Isturitz Sesma
-
+4. Start using the project!
