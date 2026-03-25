@@ -1,73 +1,37 @@
-# EEGNet-Motor-Imagery-BCI
+# Biosignal ML Analysis
 
-Development and evaluation of EEGNet-based architectures for motor imagery classification in Brain–Computer Interfaces (BCI).
+## Overview
+This repository focuses on analyzing biosignals through various methodologies, with an emphasis on Machine Learning. The toolset encompasses a range of functionalities catering to different types of signal analysis, notably EEG and LSTM gait analysis.
 
-## Project Overview
+## Functionalities
 
-This repository implements and evaluates EEG-based motor imagery classification models using state-of-the-art deep learning (EEGNet) and classical pipelines (CSP + traditional classifier).
+### EEG Analysis
+- **Description:** This module facilitates the analysis of electroencephalogram (EEG) data to extract meaningful information regarding brain activity.
+- **Key Features:**
+  - Signal pre-processing (filtering, normalization)
+  - Feature extraction (time-domain, frequency-domain)
+  - Visualization tools (spectrograms, time series)
+- **Usage:** Run `eeg_analysis.py` with your dataset to obtain analysis results.
 
-- Main dataset: BCIC IV 2a (GDF)
-- Models: EEGNet (PyTorch) and CSP + classifier (LDA/SVM)
-- Goal: compare performance and establish a reproducible workflow
+### LSTM Gait Analysis
+- **Description**: Implements Long Short-Term Memory (LSTM) networks for analyzing gait patterns.
+- **Key Features**: 
+  - Data collection from motion sensors
+  - LSTM network training and evaluation
+  - Visualization of gait patterns and predictions
+- **Usage**: Utilize `lstm_gait_analysis.ipynb` for a step-by-step analysis framework.
 
-## Repository Structure
+## Notebooks and Source Modules
+- **Notebooks:**
+  - `eeg_notebook.ipynb`: Interactive analysis of EEG data.
+  - `gait_analysis_notebook.ipynb`: Step-by-step LSTM implementation.
 
-- `datasets/BCICIV_2a_gdf/`: GDF training and test files (A01..A09)
-- `src/load_data_BCICIV.py`: data loading and dataset assembly
-- `src/preprocess.py`: filtering, epoching, and transformations
-- `src/train_CSP.py`: CSP pipeline + classifier training/evaluation
-- `src/train_EEGNet.py`: EEGNet training and evaluation
-- `models/EEGNet.py`: EEGNet architecture definition
-- `notebooks/`: exploratory analysis, training experiments, visualization
-- `figures/`: generated figures
+- **Source Modules:**
+  - `eeg_analysis.py`: Contains functions for EEG signal processing.
+  - `lstm_gait_analysis.py`: Contains functions for LSTM training and evaluation.
 
-## Requirements
+## Installation
+Follow the instructions in the repository to set up the necessary environment, including libraries and dependencies to run the analyses.
 
-Use a Python virtual environment (`venv`) to isolate dependencies and ensure reproducibility. This project uses `pyproject.toml` and `uv.lock` for dependency management.
-
-```bash
-source .venv/bin/activate
-uv sync
-```
-
-Key dependencies are declared in `pyproject.toml` and locked in `uv.lock`.
-
-Main dependencies include:
-- numpy
-- scipy
-- mne
-- torch
-- torchvision
-- scikit-learn
-- matplotlib
-
-## Notebooks
-
-- `notebooks/EEGNet.ipynb`: EDA and EEGNet training
-- `notebooks/CSP_Classifier.ipynb`: CSP + classifier pipeline
-- `notebooks/visualization.ipynb`: signal visualizations and confusion matrices
-
-## Pipeline Details
-
-### Data loading
-- `src/load_data_BCICIV.py` reads `.gdf` files, extracts events, and builds motor imagery epochs.
-
-### Preprocessing
-- Bandpass filtering (7-30 Hz)
-- Normalization
-- Laplacian filter
-
-### Models
-- `models/EEGNet.py`: 2D convolutional block, depthwise conv, separable conv, batch norm, dropout
-- Loss: CrossEntropyLoss
-- Optimizer: Adam
-
-## Metrics & Evaluation
-
-- Accuracy
-- Per subject cross-validation (Leave One Subject Out)
-
-## Contact
-
-- Author: Eneko Isturitz Sesma
-
+## Contributions
+For contributions and feature requests, please open an issue or submit a pull request. Your feedback is much appreciated!
