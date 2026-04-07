@@ -29,7 +29,7 @@ def prepare_motor_imagery_dataset(gdf_file, t_start=2.0, t_end=6.0, channels_to_
     n_samples_trial = int((t_end - t_start) * fs)
     start_idx = int(t_start * fs)
     
-    raw.filter(7, 35, fir_design='firwin', verbose=False)
+    raw.filter(8, 30, fir_design='firwin', verbose=False)
     
 
     signal = raw.get_data(picks=channels_to_use)

@@ -13,7 +13,8 @@ import os
 sys.path.append(os.path.abspath(os.path.join('..')))
 
 from src.preprocess import laplacian_filter, normalize_trial
-from models.EEGNet import EEGNet
+
+from models.CNN import ShallowConvNet, DeepConvNet
 
 np.random.seed(42)
 torch.manual_seed(42)
@@ -27,9 +28,9 @@ class EEGDataset(Dataset):
         self.augment = augment
         
         if 'multiband' in self.transforms or 'mu_band' in self.transforms:
-            self.channels = self.X.shape[2]
-        else:
             self.channels = self.X.shape[1]
+        else:
+            self.channels = self.X.shape[0]
 
         if 'laplacian' in self.transforms:
             if self.channels == 22:
@@ -93,12 +94,6 @@ class EEGDataset(Dataset):
         return x
 
 
-def apply_max_norm(model, max_val=1.0):
-    for name, param in model.named_parameters():
-        if 'weight' in name and param.ndim > 1:
-            if 'TemporalConv' in name or 'DepthSpatialConv' in name or 'FC' in name:
-                param.data.copy_(torch.renorm(param.data, p=2, dim=0, maxnorm=max_val))
-
 
 def init_weights_xavier(m):
     if isinstance(m, nn.Conv2d):
@@ -113,52 +108,54 @@ def init_weights_xavier(m):
 
 
 def training_loop(model, train_dl, epochs=100, lr=0.0005, patience=20, subject=None):
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6) 
+    criterion  = nn.CrossEntropyLoss()
+    optimizer  = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler  = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=patience // 2)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
- 
-    best_train_loss = float('inf')
-    best_train_acc  = 0.0
+
+    best_train_loss  = float('inf')
+    best_train_acc   = 0.0
     best_model_state = None
     patience_counter = 0
- 
+
     epoch_bar = tqdm(range(epochs), desc="Training", leave=False)
- 
+
     for epoch in epoch_bar:
         model.train()
         train_loss    = 0.0
         train_correct = 0
- 
+
         for batch_x, batch_y in train_dl:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
- 
+
             optimizer.zero_grad()
             output = model(batch_x)
-            loss = criterion(output, batch_y)
+            loss   = criterion(output, batch_y)
             loss.backward()
             optimizer.step()
-            apply_max_norm(model, max_val=1.0)
- 
-            train_loss += loss.item() * batch_x.size(0)
-            _, predicted = torch.max(output, 1)
+
+            model.apply_max_norm()
+
+            train_loss    += loss.item() * batch_x.size(0)
+            _, predicted   = torch.max(output, 1)
             train_correct += (predicted == batch_y).sum().item()
- 
+
         train_loss /= len(train_dl.dataset)
         train_acc   = train_correct / len(train_dl.dataset)
 
         mlflow.log_metric(f"train_loss_{subject}", train_loss, step=epoch)
         mlflow.log_metric(f"train_acc_{subject}",  train_acc,  step=epoch)
- 
+
         scheduler.step(train_loss)
- 
+
         epoch_bar.set_postfix({
             "Train Loss": f"{train_loss:.4f}",
             "Train Acc":  f"{train_acc:.3f}",
             "LR":         f"{optimizer.param_groups[0]['lr']:.6f}"
         })
- 
+
         if train_loss < best_train_loss:
             best_train_loss  = train_loss
             best_train_acc   = train_acc
@@ -166,18 +163,18 @@ def training_loop(model, train_dl, epochs=100, lr=0.0005, patience=20, subject=N
             patience_counter = 0
         else:
             patience_counter += 1
- 
+
         if patience_counter >= patience:
-            epoch_bar.write(f"Early stopping in epoch {epoch}. "
+            epoch_bar.write(f"Early stopping en epoch {epoch}. "
                             f"Best train loss: {best_train_loss:.4f}")
             break
- 
+
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
- 
+
     return model, best_train_acc
- 
- 
+
+
 def evaluate(model, test_dl):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -191,72 +188,79 @@ def evaluate(model, test_dl):
             correct += (predicted == batch_y).sum().item()
  
     return correct / len(test_dl.dataset)
- 
- 
-def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=20, augment=False):
- 
+
+
+def train_model_cv(X, y, subjects, transforms, model_type='shallow', num_classes=2, epochs=100, lr=0.0003, patience=20, augment=False):
+
     if len(X.shape) == 3:
         _, channels, samples = X.shape
     else:
         _, _, channels, samples = X.shape
- 
+
     if 'multiband' in transforms:
         channels = channels * 2
- 
+
     models_per_subject = []
 
-    run_name = f"EEGNet_{channels}_{'_'.join(transforms)}_{'aug' if augment else 'noaug'}"
- 
-    mlflow.set_experiment('BCI_EEGNet')
- 
+    run_name = (f"{model_type.capitalize()}ConvNet_{channels}_"
+                f"{'_'.join(transforms)}_{'aug' if augment else 'noaug'}")
+
+    mlflow.set_experiment('BCI_ConvNet')
+
     with mlflow.start_run(run_name=run_name):
- 
+
+        mlflow.log_param("model_type", model_type)
         mlflow.log_param("epochs",     epochs)
         mlflow.log_param("lr",         lr)
         mlflow.log_param("patience",   patience)
         mlflow.log_param("transforms", transforms)
-        mlflow.log_param("augment", augment)
- 
+        mlflow.log_param("augment",    augment)
+
         logo = LeaveOneGroupOut()
         test_subject_accuracies = []
- 
+
         for i, (train_index, test_index) in enumerate(logo.split(X, y, subjects)):
 
             subject = subjects[test_index][0]
- 
+
             X_train, X_test = X[train_index], X[test_index]
             y_train, y_test = y[train_index], y[test_index]
- 
+
             train_dataset = EEGDataset(X_train, y_train, transforms=transforms, augment=augment)
             test_dataset  = EEGDataset(X_test,  y_test,  transforms=transforms, augment=False)
- 
-            train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
+
+            train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True,  num_workers=4)
             test_dl  = DataLoader(test_dataset,  batch_size=32, shuffle=False, num_workers=4)
- 
-            model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
+
+            if model_type == 'shallow':
+                model = ShallowConvNet(num_channels=channels, signal_length=samples, num_classes=num_classes)
+            elif model_type == 'deep':
+                model = DeepConvNet(num_channels=channels, signal_length=samples, num_classes=num_classes)
+            else:
+                raise ValueError(f"model_type unknown: {model_type!r}. "
+                                  "Use 'shallow' or 'deep'.")
+
             model.apply(init_weights_xavier)
- 
+
             trained_model, train_acc = training_loop(model, train_dl, epochs=epochs, lr=lr, patience=patience, subject=subject)
- 
+
             test_acc = evaluate(trained_model, test_dl)
- 
+
             test_subject_accuracies.append(test_acc)
             models_per_subject.append(trained_model)
- 
-            subject = subjects[test_index][0]
+
             print(f"Fold {i+1} | Subject {subject} | "
                   f"Train Acc: {train_acc:.4f} | Test Acc: {test_acc:.4f}")
- 
+
             mlflow.log_metric(f'subject_{subject}_train_accuracy', train_acc)
             mlflow.log_metric(f'subject_{subject}_test_accuracy',  test_acc)
             mlflow.pytorch.log_model(trained_model, artifact_path=f'model_subject_{subject}')
-            
- 
+
         mean_acc = np.mean(test_subject_accuracies)
         std_acc  = np.std(test_subject_accuracies)
         print(f"\nMean Subject Test Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
- 
+
         mlflow.log_metric('mean_accuracy', mean_acc)
         mlflow.log_metric('std_accuracy',  std_acc)
- 
+
     return models_per_subject, test_subject_accuracies
