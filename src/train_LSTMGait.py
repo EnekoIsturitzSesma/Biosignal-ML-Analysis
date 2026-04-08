@@ -14,7 +14,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join('..')))
 
-from models.LSTMGait import LSTMGait
+from models.LSTMGait import LSTMGait, CNNBiLSTMGait
 from src.load_data_gait import load_trial
 
 np.random.seed(42)
@@ -125,7 +125,7 @@ def training_loop(model, train_dl, val_dl, num_classes, epochs=100, lr=0.0005, p
 
 
 
-def train_model_cv(X, y, subjects, epochs=100, lr=0.0003, patience=20, out_dir="checkpoints"):
+def train_model_cv(X, y, subjects, model_name, epochs=100, lr=0.0003, patience=20, out_dir="checkpoints"):
 
     os.makedirs(out_dir, exist_ok=True)
     summary_path = os.path.join(out_dir, "summary.json")
@@ -151,7 +151,12 @@ def train_model_cv(X, y, subjects, epochs=100, lr=0.0003, patience=20, out_dir="
         subject = str(subjects[test_index][0])
         if subject in done_subjects:
             ckpt =torch.load(os.path.join(out_dir, f"model_{subject}.pt"), map_location='cpu')
-            model = LSTMGait(num_channels, num_classes, hidden_size=128, num_layers=2, dropout_rate=0.25)
+
+            if model_name.lower() == "lstm":
+                model = LSTMGait(num_channels, num_classes, hidden_size=128, num_layers=2, dropout_rate=0.25)
+            elif model_name.lower() == "cnnbilstm":
+                model = CNNBiLSTMGait(num_channels, num_classes, cnn_channels=64, kernel_size=5, hidden_size=128, num_layers=2, dropout_rate=0.25)
+            
             model.load_state_dict(ckpt['state_dict'])
             models_per_subject.append(model)
             test_subject_f1s.append(ckpt['test_f1'])
@@ -177,7 +182,10 @@ def train_model_cv(X, y, subjects, epochs=100, lr=0.0003, patience=20, out_dir="
         val_dl   = DataLoader(LSTMGaitDataset(X_val,   y_val),   batch_size=128, shuffle=False)
         test_dl  = DataLoader(LSTMGaitDataset(X_test,  y_test),  batch_size=128, shuffle=False)
 
-        model = LSTMGait(num_channels, num_classes, hidden_size=128, num_layers=2, dropout_rate=0.25)
+        if model_name.lower() == "lstm":
+            model = LSTMGait(num_channels, num_classes, hidden_size=128, num_layers=2, dropout_rate=0.25)
+        elif model_name.lower() == "cnnbilstm":
+            model = CNNBiLSTMGait(num_channels, num_classes, cnn_channels=64, kernel_size=5, hidden_size=128, num_layers=2, dropout_rate=0.25)
 
         trained_model, best_val_f1 = training_loop(model, train_dl, val_dl, num_classes, epochs=epochs, lr=lr, patience=patience)
 
