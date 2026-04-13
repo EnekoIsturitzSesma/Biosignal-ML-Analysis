@@ -249,7 +249,7 @@ def plot_gait_detection(y, trial, path, title, sensor='LB', signal_channel='ACC_
     elif process == 'processed':
         signal = pd.read_csv(f'{trial}_{process}_data.txt', sep='\t')
 
-    print(signal.columns)
+
     data_plot = signal[[signal_channel]]
 
     right_intervals = find_intervals(y, 2)

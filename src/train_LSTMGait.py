@@ -45,6 +45,13 @@ def compute_normalization(X):
 
 def apply_normalization(X, mean, std):
 
+    return (X - mean) / (std + 1e-8)
+
+
+def normalize_per_window(X):
+    # X shape: (windows, samples, features)
+    mean = X.mean(axis=1, keepdims=True)
+    std  = X.std(axis=1, keepdims=True) + 1e-8
     return (X - mean) / std
 
 
@@ -125,7 +132,7 @@ def training_loop(model, train_dl, val_dl, num_classes, epochs=100, lr=0.0005, p
 
 
 
-def train_model_cv(X, y, subjects, model_name, epochs=100, lr=0.0003, patience=20, out_dir="checkpoints"):
+def train_model_cv(X, y, subjects, model_name, norm="subj", epochs=100, lr=0.0003, patience=20, out_dir="checkpoints"):
 
     os.makedirs(out_dir, exist_ok=True)
     summary_path = os.path.join(out_dir, "summary.json")
@@ -173,10 +180,16 @@ def train_model_cv(X, y, subjects, model_name, epochs=100, lr=0.0003, patience=2
         X_train, X_val = X_trainval[train_idx], X_trainval[val_idx]
         y_train, y_val = y_trainval[train_idx], y_trainval[val_idx]
 
-        mean, std = compute_normalization(X_train)
-        X_train = apply_normalization(X_train, mean, std)
-        X_val   = apply_normalization(X_val,   mean, std)
-        X_test  = apply_normalization(X_test,  mean, std)
+        if norm == "subj":
+            mean, std = compute_normalization(X_train)
+            X_train = apply_normalization(X_train, mean, std)
+            X_val   = apply_normalization(X_val,   mean, std)
+            X_test  = apply_normalization(X_test,  mean, std)
+
+        elif norm == "window":
+            X_train = normalize_per_window(X_train)
+            X_val   = normalize_per_window(X_val)
+            X_test  = normalize_per_window(X_test)
 
         train_dl = DataLoader(LSTMGaitDataset(X_train, y_train), batch_size=128, shuffle=True)
         val_dl   = DataLoader(LSTMGaitDataset(X_val,   y_val),   batch_size=128, shuffle=False)
@@ -202,17 +215,31 @@ def train_model_cv(X, y, subjects, model_name, epochs=100, lr=0.0003, patience=2
         test_f1 = f1_score(test_true, test_preds, average='macro')
 
         ckpt_path = os.path.join(out_dir, f"model_{subject}.pt")
-        torch.save({
-            'subject': subject,
-            'fold': i,
-            'state_dict': trained_model.state_dict(),
-            'val_f1': best_val_f1,
-            'test_f1': test_f1,
-            'norm_mean': mean,
-            'norm_std': std,
-            'num_channels': num_channels,
-            'num_classes': num_classes,
-        }, ckpt_path)
+        if norm == "subj":
+            torch.save({
+                'subject': subject,
+                'fold': i,
+                'state_dict': trained_model.state_dict(),
+                'val_f1': best_val_f1,
+                'test_f1': test_f1,
+                'norm_type': norm,
+                'norm_mean': mean,
+                'norm_std': std,
+                'num_channels': num_channels,
+                'num_classes': num_classes,
+            }, ckpt_path)
+
+        elif norm == "window":
+            torch.save({
+                'subject': subject,
+                'fold': i,
+                'state_dict': trained_model.state_dict(),
+                'val_f1': best_val_f1,
+                'test_f1': test_f1,
+                'norm_type': norm,
+                'num_channels': num_channels,
+                'num_classes': num_classes,
+            }, ckpt_path)
 
         summary.append({
             'subject': subject,
@@ -246,26 +273,44 @@ def train_model_cv(X, y, subjects, model_name, epochs=100, lr=0.0003, patience=2
     return models_per_subject, test_subject_f1s
 
 
-def load_model(subject, out_dir="checkpoints/processed"):
+def load_model(subject, model_name, out_dir="checkpoints/processed"):
     ckpt = torch.load(
         os.path.join(out_dir, f"model_{subject}.pt"),
         map_location='cpu',
         weights_only=False
     )
-    model = LSTMGait(
-        ckpt['num_channels'],
-        ckpt['num_classes'],
-        hidden_size=128,
-        num_layers=2,
-        dropout_rate=0.25
-    )
+    if model_name.lower() == "lstm":
+        model = LSTMGait(
+            ckpt['num_channels'],
+            ckpt['num_classes'],
+            hidden_size=128,
+            num_layers=2,
+            dropout_rate=0.25
+        )
+
+    elif model_name.lower() == "cnnbilstm":
+        model = CNNBiLSTMGait(
+            ckpt['num_channels'],
+            ckpt['num_classes'],
+            cnn_channels=64,
+            kernel_size=5,
+            hidden_size=128,
+            num_layers=2,
+            dropout_rate=0.25
+        )
+
     model.load_state_dict(ckpt['state_dict'])
     model.eval()
-    return model, ckpt['norm_mean'], ckpt['norm_std']
+
+    norm_mean = ckpt.get('norm_mean')
+    norm_std  = ckpt.get('norm_std')
+    norm_type = ckpt.get('norm_type', 'subj')
+
+    return model, norm_type, norm_mean, norm_std
 
 
 
-def predict_trial(base_path, trial_name, subject, process="preprocessed", window_size=100, stride=25, out_dir="checkpoints/processed"):
+def predict_trial(base_path, trial_name, subject, model_name, process="preprocessed", sensors=None, window_size=100, stride=25, out_dir="checkpoints/processed"):
 
     trial = load_trial(base_path, trial_name)
     trial_metadata = trial['metadata']
@@ -275,9 +320,16 @@ def predict_trial(base_path, trial_name, subject, process="preprocessed", window
         X_raw = pd.DataFrame(X_trial)
     elif process == "raw":
         X_trial = trial['data_raw']
-        X_raw = pd.concat(
-            [df.add_prefix(f"{key}_") for key, df in X_trial.items()], axis=1
-        )
+        if sensors is None:
+            X_raw = pd.concat([df.add_prefix(f"{sensor_key}_") for sensor_key, df in X_trial.items()], axis=1)
+        else:
+            filtered_dfs = [
+                df.add_prefix(f"{sensor_key}_")
+                for sensor_key, df in X_trial.items()
+                if sensor_key in sensors
+            ]
+
+            X_raw = pd.concat(filtered_dfs, axis=1)
 
     X_clean = X_raw.dropna(how='any').to_numpy()
     n_samples = X_clean.shape[0]
@@ -289,7 +341,7 @@ def predict_trial(base_path, trial_name, subject, process="preprocessed", window
     for start, end in trial_metadata['rightGaitEvents']:
         y_true[start:min(end, n_samples)] = 2
 
-    model, norm_mean, norm_std = load_model(subject, out_dir)
+    model, norm_type, norm_mean, norm_std = load_model(subject, model_name, out_dir)
 
     windows = []
     window_starts = list(range(0, n_samples - window_size + 1, stride))
@@ -297,10 +349,14 @@ def predict_trial(base_path, trial_name, subject, process="preprocessed", window
         windows.append(X_clean[start:start + window_size])
     X_wins = np.stack(windows).astype(np.float32) 
 
-    X_wins = apply_normalization(X_wins, norm_mean, norm_std)
+    if norm_type == "subj":
+        X_wins = apply_normalization(X_wins, norm_mean, norm_std)
+    elif norm_type == "window":
+        X_wins = normalize_per_window(X_wins)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
+    model.eval()
 
     with torch.no_grad():
         output = model(torch.from_numpy(X_wins).to(device))

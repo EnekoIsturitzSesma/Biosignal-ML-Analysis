@@ -189,7 +189,13 @@ def load_metadata(trial_path):
     return metadata
 
 
-def load_dataset_gait(base_path, process="raw", sensors=None, window_size=100, stride=25):
+def add_derivatives(X):
+
+    dX = np.diff(X, axis=0, prepend=X[0:1])
+    return np.concatenate([X, dX], axis=1)
+
+
+def load_dataset_gait(base_path, process="raw", sensors=None, deriv=False, window_size=100, stride=25):
 
     structure = load_bdd(base_path)
 
@@ -225,7 +231,15 @@ def load_dataset_gait(base_path, process="raw", sensors=None, window_size=100, s
                     else:
                         print(f"{process} is not a valid keyword for parameter process")
                     
-                    X_clean = X_raw.dropna(how='any').to_numpy()
+                    X_clean = (
+                        X_raw
+                        .drop(columns=[c for c in X_raw.columns if "PacketCounter" in c])
+                        .dropna(how="any")
+                        .to_numpy()
+                    )
+
+                    if deriv:
+                        X_clean = add_derivatives(X_clean)
                     
                     if len(X_clean) < window_size:
                         continue
