@@ -331,7 +331,12 @@ def predict_trial(base_path, trial_name, subject, model_name, process="preproces
 
             X_raw = pd.concat(filtered_dfs, axis=1)
 
-    X_clean = X_raw.dropna(how='any').to_numpy()
+    X_clean = (
+        X_raw
+        .drop(columns=[c for c in X_raw.columns if "PacketCounter" in c])
+        .dropna(how="any")
+        .to_numpy()
+    )
     n_samples = X_clean.shape[0]
 
 
