@@ -22,9 +22,9 @@ def load_bdd(base_path):
             for cohort in os.listdir(top_path):
                 cohort_path = os.path.join(top_path, cohort)
                 if os.path.isdir(cohort_path):
-                    bdd_structure[top_level][cohort] = [
+                    bdd_structure[top_level][cohort] = sorted([
                         patient for patient in os.listdir(cohort_path) if os.path.isdir(os.path.join(cohort_path, patient))
-                    ]
+                    ])
     return bdd_structure
 
 
@@ -43,7 +43,7 @@ def load_cohort(base_path, cohort_name):
     for top_level in ["healthy", "ortho", "neuro"]:
         top_path = os.path.join(base_path, top_level)
         if os.path.exists(top_path):
-            for cohort in os.listdir(top_path):
+            for cohort in sorted(os.listdir(top_path)):
                 if cohort == cohort_name:
                     cohort_path = os.path.join(top_path, cohort)
                     cohort_top_level = top_level
@@ -52,8 +52,8 @@ def load_cohort(base_path, cohort_name):
         raise ValueError(f"The cohort '{cohort_name}' does not exist.")
 
     return cohort_top_level, {
-        patient: os.listdir(os.path.join(cohort_path, patient))
-        for patient in os.listdir(cohort_path) if os.path.isdir(os.path.join(cohort_path, patient))
+        patient: sorted(os.listdir(os.path.join(cohort_path, patient)))
+        for patient in sorted(os.listdir(cohort_path)) if os.path.isdir(os.path.join(cohort_path, patient))
     }
 
 
@@ -76,7 +76,7 @@ def load_patient(base_path, patient_name):
         raise ValueError(f"The patient '{patient_name}' does not exist in cohort '{cohort_name}'.")
 
     patient_path = os.path.join(base_path, top_level, cohort_name, patient_name)
-    return patient_path, os.listdir(patient_path)
+    return patient_path, sorted(os.listdir(patient_path))
 
 
 def load_trial(base_path, trial_name):
@@ -203,6 +203,18 @@ def load_dataset_gait(base_path, process="raw", sensors=None, deriv=False, windo
     y_all = []
     groups = []
 
+    deficit_side = {
+        "right": "RF",
+        "left": "LF",
+        None: "LF"
+    } 
+
+    no_deficit_side = {
+        "right": "LF",
+        "left": "RF",
+        None: "LF"
+    } 
+
     for key in structure.keys():
         for cohort in structure[key].keys():
             subjects = structure[key][cohort]
@@ -220,11 +232,44 @@ def load_dataset_gait(base_path, process="raw", sensors=None, deriv=False, windo
                         if sensors is None:
                             X_raw = pd.concat([df.add_prefix(f"{sensor_key}_") for sensor_key, df in X_trial.items()], axis=1)
                         else:
-                            filtered_dfs = [
-                                df.add_prefix(f"{sensor_key}_")
-                                for sensor_key, df in X_trial.items()
-                                if sensor_key in sensors
-                            ]
+                            if "affected" in sensors:
+                                sensor_list = list(sensors)  
+                                affected_side_sensor = trial_metadata['clinicalDeficitSide']
+                                real_sensor = deficit_side[affected_side_sensor]
+
+                                sensor_alias = {s: s for s in sensor_list}
+                                sensor_alias[real_sensor] = "affected" 
+
+                                sensor_list[sensor_list.index("affected")] = real_sensor
+
+                                filtered_dfs = [
+                                    df.add_prefix(f"{sensor_alias[sensor_key]}_")  
+                                    for sensor_key, df in X_trial.items()
+                                    if sensor_key in sensor_list
+                                ]
+
+                            elif "non_affected" in sensors:
+                                sensor_list = list(sensors)  
+                                affected_side_sensor = trial_metadata['clinicalDeficitSide']
+                                real_sensor = no_deficit_side[affected_side_sensor]
+
+                                sensor_alias = {s: s for s in sensor_list}
+                                sensor_alias[real_sensor] = "non_affected" 
+
+                                sensor_list[sensor_list.index("non_affected")] = real_sensor
+
+                                filtered_dfs = [
+                                    df.add_prefix(f"{sensor_alias[sensor_key]}_")  
+                                    for sensor_key, df in X_trial.items()
+                                    if sensor_key in sensor_list
+                                ]
+
+                            else:
+                                filtered_dfs = [
+                                    df.add_prefix(f"{sensor_key}_")
+                                    for sensor_key, df in X_trial.items()
+                                    if sensor_key in sensors
+                                ]
 
                             X_raw = pd.concat(filtered_dfs, axis=1)
 

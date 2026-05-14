@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib import patches
 import pandas as pd
+import json
 
 import sys
 import os
@@ -242,35 +243,121 @@ def find_intervals(pred, val):
   return intervals
 
 
-def plot_gait_detection(y, trial, path, title, sensor='LB', signal_channel='ACC_Z', process='raw'):
+def plot_gait_detection(y_true, y_pred, trial, path, title_base, sensor='LB', signal_channel='Acc_Z', process='raw', save_path=None):
 
     if process == 'raw':
         signal = pd.read_csv(f'{path}/{trial}_{process}_data_{sensor}.txt', sep='\t')
     elif process == 'processed':
         signal = pd.read_csv(f'{trial}_{process}_data.txt', sep='\t')
 
-
     data_plot = signal[[signal_channel]]
 
-    right_intervals = find_intervals(y, 2)
-    left_intervals = find_intervals(y, 1)
-    gaps = find_intervals(y, 0)
-
-    plt.figure(figsize=(20,4))
-
-    for interval in right_intervals:
-        plt.axvspan(interval[0], interval[1], color="red", alpha=0.3)
-    for interval in left_intervals:
-        plt.axvspan(interval[0], interval[1], color="green", alpha=0.3)
-    for gap in gaps:
-        plt.axvspan(gap[0], gap[1], color="blue", alpha=0.1)
-
-    plt.plot(data_plot, color='black')
-
-    red_patch = mpatches.Patch(color="red", alpha=0.3, label="Right gait")
+    red_patch   = mpatches.Patch(color="red",   alpha=0.3, label="Right gait")
     green_patch = mpatches.Patch(color="green", alpha=0.3, label="Left gait")
-    blue_patch = mpatches.Patch(color="blue", alpha=0.1, label="No gait")
+    blue_patch  = mpatches.Patch(color="blue",  alpha=0.1, label="No gait")
 
-    plt.legend(handles=[red_patch, green_patch, blue_patch])
-    plt.title(title)
+    fig, axes = plt.subplots(2, 1, figsize=(20, 6), sharex=True)
+    fig.suptitle(title_base, fontsize=12)
+
+    for ax, y, subtitle in zip(axes, [y_true, y_pred], ["Ground Truth", "Predicted"]):
+        for interval in find_intervals(y, 2):
+            ax.axvspan(interval[0], interval[1], color="red", alpha=0.3)
+        for interval in find_intervals(y, 1):
+            ax.axvspan(interval[0], interval[1], color="green", alpha=0.3)
+        for gap in find_intervals(y, 0):
+            ax.axvspan(gap[0], gap[1], color="blue", alpha=0.1)
+
+        ax.plot(data_plot.values, color='black', linewidth=0.8)
+        ax.set_title(subtitle)
+        ax.legend(handles=[red_patch, green_patch, blue_patch])
+        ax.set_ylabel(signal_channel)
+
+    axes[-1].set_xlabel("Sample")
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Guardado en: {save_path}")
+
     plt.show()
+
+
+def statistical_analysis(out_dir, model_name="", sensor=""):
+    with open(os.path.join(out_dir, "summary.json")) as f:
+        summary = json.load(f)
+
+    df = pd.DataFrame(summary)
+    df['group'] = df['subject'].str.extract(r'^([A-Za-z]+)')
+
+    print(f"{'='*50}")
+    print(f"Model: {model_name} | Sensor: {sensor}")
+    print(f"{'='*50}")
+    print(df[['val_f1', 'test_f1']].describe().round(4).to_string())
+    print(f"\nTest F1 Median: {df['test_f1'].median():.4f}")
+    print(f"Mean Test F1 : {df['test_f1'].mean():.4f} ± {df['test_f1'].std():.4f}")
+
+    group_stats = (df.groupby('group')['test_f1']
+                   .agg(['mean', 'median', 'std', 'count'])
+                   .round(3)
+                   .sort_values('mean'))
+    print(f"\Per cohort:\n{group_stats.to_string()}")
+
+    COLOR_MAP = {
+        'HS':   ('Healthy',        'lightgreen'),
+        'ACL':  ('Orthopaedic',    'lightcoral'),
+        'HOA':  ('Orthopaedic',    'lightcoral'),
+        'KOA':  ('Orthopaedic',    'lightcoral'),
+        'CIPN': ('Neurological',   'lightblue'),
+        'CVA':  ('Neurological',   'lightblue'),
+        'PD':   ('Neurological',   'lightblue'),
+        'RIL':  ('Neurological',   'lightblue'),
+    }
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig.suptitle(f"Test F1 — {model_name}  |  {sensor}", fontsize=13, y=1.01)
+
+    global_mean   = df['test_f1'].mean()
+    global_median = df['test_f1'].median()
+    threshold     = df['test_f1'].quantile(0.20)
+    outliers      = df[df['test_f1'] < threshold]
+
+    ax = axes[0]
+    ax.boxplot(df['test_f1'], patch_artist=True,
+               boxprops=dict(facecolor='steelblue', alpha=0.5),
+               medianprops=dict(color='red', linewidth=2), widths=0.4)
+    ax.scatter([1]*len(df),       df['test_f1'],    alpha=0.3, color='steelblue', s=15, zorder=3)
+    ax.scatter([1]*len(outliers), outliers['test_f1'], alpha=0.9, color='tomato', s=30, zorder=4, label='Worst 20%')
+    ax.set_xticks([1]); ax.set_xticklabels(['All subjects'])
+    ax.set_ylabel('Macro F1'); ax.set_title('Global distribution')
+    ax.legend(); ax.grid(axis='y', alpha=0.4)
+
+    ax = axes[1]
+    ax.hist(df['test_f1'], bins=25, color='steelblue', alpha=0.75, edgecolor='white')
+    ax.axvline(global_mean,   color='red',    linestyle='--', label=f'Mean {global_mean:.3f}')
+    ax.axvline(global_median, color='orange', linestyle='--', label=f'Median {global_median:.3f}')
+    ax.axvline(threshold,     color='tomato', linestyle=':',  label=f'P20 {threshold:.3f}')
+    ax.set_xlabel('Macro F1'); ax.set_ylabel('Nº subjects')
+    ax.set_title('Histogram'); ax.legend(); ax.grid(axis='y', alpha=0.4)
+
+    ax = axes[2]
+    seen_labels = set()
+    for group, stats_row in group_stats.iterrows():
+        label_name, color = COLOR_MAP.get(group, ('Other', 'gray'))
+        label = label_name if label_name not in seen_labels else "_nolegend_"
+        seen_labels.add(label_name)
+
+        scores = df[df['group'] == group]['test_f1'].values
+        bar = ax.bar(group, scores.mean(), yerr=scores.std(),
+                     capsize=5, color=color, alpha=0.8, label=label)
+        ax.bar_label(bar, fmt='%.3f', fontsize=8)
+
+    ax.axhline(global_mean, color='black', linestyle='--', alpha=0.7, label=f'Global mean {global_mean:.3f}')
+    ax.set_ylim(0.4, 1.1); ax.set_ylabel('Mean Macro F1')
+    ax.set_title('By clinical cohort')
+    ax.legend(fontsize=9); ax.grid(axis='y', alpha=0.4)
+
+    plt.tight_layout()
+    plot_path = os.path.join(out_dir, "analysis.png")
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.show()
+    print(f"\nFigure saved in: {plot_path}")

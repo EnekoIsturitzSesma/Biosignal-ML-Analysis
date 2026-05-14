@@ -17,8 +17,9 @@ sys.path.append(os.path.abspath(os.path.join('..')))
 from models.LSTMGait import LSTMGait, CNNBiLSTMGait
 from src.load_data_gait import load_trial
 
-np.random.seed(42)
-torch.manual_seed(42)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
 
 class LSTMGaitDataset(Dataset):
     def __init__(self, X, y):
@@ -60,11 +61,10 @@ def training_loop(model, train_dl, val_dl, num_classes, epochs=100, lr=0.0005, p
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=patience)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=patience//2)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
-
     best_val_f1 = 0 
     best_model_state = None
     patience_counter = 0
@@ -134,6 +134,9 @@ def training_loop(model, train_dl, val_dl, num_classes, epochs=100, lr=0.0005, p
 
 def train_model_cv(X, y, subjects, model_name, norm="subj", epochs=100, lr=0.0003, patience=20, out_dir="checkpoints"):
 
+    np.random.seed(42)
+    torch.manual_seed(42)
+
     os.makedirs(out_dir, exist_ok=True)
     summary_path = os.path.join(out_dir, "summary.json")
 
@@ -191,7 +194,9 @@ def train_model_cv(X, y, subjects, model_name, norm="subj", epochs=100, lr=0.000
             X_val   = normalize_per_window(X_val)
             X_test  = normalize_per_window(X_test)
 
-        train_dl = DataLoader(LSTMGaitDataset(X_train, y_train), batch_size=128, shuffle=True)
+        g = torch.Generator()
+        g.manual_seed(42)
+        train_dl = DataLoader(LSTMGaitDataset(X_train, y_train), batch_size=128, shuffle=True, generator=g)
         val_dl   = DataLoader(LSTMGaitDataset(X_val,   y_val),   batch_size=128, shuffle=False)
         test_dl  = DataLoader(LSTMGaitDataset(X_test,  y_test),  batch_size=128, shuffle=False)
 
@@ -315,6 +320,18 @@ def predict_trial(base_path, trial_name, subject, model_name, process="preproces
     trial = load_trial(base_path, trial_name)
     trial_metadata = trial['metadata']
 
+    deficit_side = {
+        "right": "RF",
+        "left": "LF",
+        None: "LF"
+    } 
+
+    no_deficit_side = {
+        "right": "LF",
+        "left": "RF",
+        None: "LF"
+    } 
+
     if process == "preprocessed":
         X_trial = trial['data_processed']
         X_raw = pd.DataFrame(X_trial)
@@ -323,11 +340,44 @@ def predict_trial(base_path, trial_name, subject, model_name, process="preproces
         if sensors is None:
             X_raw = pd.concat([df.add_prefix(f"{sensor_key}_") for sensor_key, df in X_trial.items()], axis=1)
         else:
-            filtered_dfs = [
-                df.add_prefix(f"{sensor_key}_")
-                for sensor_key, df in X_trial.items()
-                if sensor_key in sensors
-            ]
+            if "affected" in sensors:
+                sensor_list = list(sensors)  
+                affected_side_sensor = trial_metadata['clinicalDeficitSide']
+                real_sensor = deficit_side[affected_side_sensor]
+
+                sensor_alias = {s: s for s in sensor_list}
+                sensor_alias[real_sensor] = "affected" 
+
+                sensor_list[sensor_list.index("affected")] = real_sensor
+
+                filtered_dfs = [
+                    df.add_prefix(f"{sensor_alias[sensor_key]}_")  
+                    for sensor_key, df in X_trial.items()
+                    if sensor_key in sensor_list
+                ]
+
+            elif "non_affected" in sensors:
+                sensor_list = list(sensors)  
+                affected_side_sensor = trial_metadata['clinicalDeficitSide']
+                real_sensor = no_deficit_side[affected_side_sensor]
+
+                sensor_alias = {s: s for s in sensor_list}
+                sensor_alias[real_sensor] = "non_affected" 
+
+                sensor_list[sensor_list.index("non_affected")] = real_sensor
+
+                filtered_dfs = [
+                    df.add_prefix(f"{sensor_alias[sensor_key]}_")  
+                    for sensor_key, df in X_trial.items()
+                    if sensor_key in sensor_list
+                ]
+
+            else:
+                filtered_dfs = [
+                    df.add_prefix(f"{sensor_key}_")
+                    for sensor_key, df in X_trial.items()
+                    if sensor_key in sensors
+                ]
 
             X_raw = pd.concat(filtered_dfs, axis=1)
 
@@ -338,7 +388,6 @@ def predict_trial(base_path, trial_name, subject, model_name, process="preproces
         .to_numpy()
     )
     n_samples = X_clean.shape[0]
-
 
     y_true = np.zeros(n_samples, dtype=np.int64)
     for start, end in trial_metadata['leftGaitEvents']:
