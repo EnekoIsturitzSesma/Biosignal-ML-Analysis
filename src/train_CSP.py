@@ -20,11 +20,13 @@ def train_CSP(X, y, subjects, pipeline, param_grid, run_name):
         unique_subjets = np.unique(subjects)
 
         print("\n Results per fold (best hyperparameters):")
+        subject_scores = []  
         best_idx = grid_search.best_index_
 
         for i in range(n_splits):
             train_score = results[f'split{i}_train_score'][best_idx]
             test_score = results[f'split{i}_test_score'][best_idx] 
+            subject_scores.append(test_score)
 
             mlflow.log_metric(f'subject_{unique_subjets[i]}_train_accuracy', train_score)
             mlflow.log_metric(f'subject_{unique_subjets[i]}_test_accuracy', test_score)
@@ -35,7 +37,7 @@ def train_CSP(X, y, subjects, pipeline, param_grid, run_name):
         mlflow.log_metric("cv_accuracy", grid_search.best_score_)
         mlflow.sklearn.log_model(grid_search.best_estimator_, artifact_path="model")
 
-    return grid_search.best_estimator_, grid_search.best_params_, grid_search.best_score_
+    return grid_search.best_estimator_, grid_search.best_params_, grid_search.best_score_, subject_scores
 
 
 

@@ -4,6 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from sklearn.model_selection import LeaveOneGroupOut
 from tqdm import tqdm
+import random
 import mlflow
 import mlflow.pytorch
 
@@ -15,8 +16,14 @@ sys.path.append(os.path.abspath(os.path.join('..')))
 from src.preprocess import laplacian_filter, normalize_trial
 from models.EEGNet import EEGNet
 
-np.random.seed(42)
-torch.manual_seed(42)
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
+torch.backends.cudnn.deterministic = True  
+torch.backends.cudnn.benchmark     = False 
 
 
 class EEGDataset(Dataset):
@@ -151,7 +158,7 @@ def training_loop(model, train_dl, epochs=100, lr=0.0005, patience=20, subject=N
         mlflow.log_metric(f"train_loss_{subject}", train_loss, step=epoch)
         mlflow.log_metric(f"train_acc_{subject}",  train_acc,  step=epoch)
  
-        scheduler.step(train_loss)
+        scheduler.step()
  
         epoch_bar.set_postfix({
             "Train Loss": f"{train_loss:.4f}",
@@ -194,6 +201,10 @@ def evaluate(model, test_dl):
  
  
 def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=20, augment=False):
+
+    np.random.seed(42)
+    torch.manual_seed(42)
+    random.seed(42)
  
     if len(X.shape) == 3:
         _, channels, samples = X.shape
@@ -229,9 +240,12 @@ def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=2
  
             train_dataset = EEGDataset(X_train, y_train, transforms=transforms, augment=augment)
             test_dataset  = EEGDataset(X_test,  y_test,  transforms=transforms, augment=False)
+
+            g = torch.Generator()
+            g.manual_seed(42)
  
-            train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
-            test_dl  = DataLoader(test_dataset,  batch_size=32, shuffle=False, num_workers=4)
+            train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4, generator=g, worker_init_fn=seed_worker, pin_memory=True)
+            test_dl  = DataLoader(test_dataset,  batch_size=32, shuffle=False, num_workers=4, pin_memory=True)
  
             model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
             model.apply(init_weights_xavier)
@@ -259,4 +273,134 @@ def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=2
         mlflow.log_metric('mean_accuracy', mean_acc)
         mlflow.log_metric('std_accuracy',  std_acc)
  
+    return models_per_subject, test_subject_accuracies
+
+
+
+def training_loop_with_val(model, train_dl, val_dl, epochs=100, lr=0.0005, patience=20, subject=None):
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    best_val_acc     = 0.0
+    best_model_state = None
+    patience_counter = 0
+
+    for epoch in (bar := tqdm(range(epochs), desc="Training", leave=False)):
+        model.train()
+        for batch_x, batch_y in train_dl:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            optimizer.zero_grad()
+            loss = criterion(model(batch_x), batch_y)
+            loss.backward()
+            optimizer.step()
+            apply_max_norm(model, max_val=1.0)
+
+        scheduler.step()
+
+        val_acc = evaluate(model, val_dl)   
+
+        mlflow.log_metric(f"val_acc_{subject}", val_acc, step=epoch)
+        bar.set_postfix({"Val Acc": f"{val_acc:.3f}"})
+
+        if val_acc > best_val_acc:
+            best_val_acc     = val_acc
+            best_model_state = model.state_dict()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                bar.write(f"Early stopping época {epoch}. Best val: {best_val_acc:.4f}")
+                break
+
+    model.load_state_dict(best_model_state)
+    return model, best_val_acc
+
+
+
+
+def train_model_within_subject(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=20, augment=False):
+    
+    np.random.seed(42)
+    torch.manual_seed(42)
+    random.seed(42)
+
+    if len(X.shape) == 3:
+        _, channels, samples = X.shape
+    else:
+        _, _, channels, samples = X.shape
+
+    if 'multiband' in transforms:
+        channels = channels * 2
+
+    models_per_subject     = []
+    test_subject_accuracies = []
+
+    run_name = f"EEGNet_within_{channels}_{'_'.join(transforms)}_{'aug' if augment else 'noaug'}"
+    mlflow.set_experiment('BCI_EEGNet_within')
+
+    with mlflow.start_run(run_name=run_name):
+
+        mlflow.log_params({
+            "epochs": epochs, "lr": lr,
+            "patience": patience, "transforms": transforms, "augment": augment,
+        })
+
+        for subject in np.unique(subjects):
+
+            mask       = subjects == subject
+            X_s, y_s   = X[mask], y[mask]
+
+            n          = len(X_s)
+            idx        = np.random.permutation(n)
+            train_end  = int(0.60 * n)
+            val_end    = int(0.80 * n)
+
+            train_idx  = idx[:train_end]
+            val_idx    = idx[train_end:val_end]
+            test_idx   = idx[val_end:]
+
+            X_train, y_train = X_s[train_idx], y_s[train_idx]
+            X_val,   y_val   = X_s[val_idx],   y_s[val_idx]
+            X_test,  y_test  = X_s[test_idx],  y_s[test_idx]
+
+            train_dataset = EEGDataset(X_train, y_train, transforms=transforms, augment=augment)
+            val_dataset   = EEGDataset(X_val,   y_val,   transforms=transforms, augment=False)
+            test_dataset  = EEGDataset(X_test,  y_test,  transforms=transforms, augment=False)
+
+            g = torch.Generator()
+            g.manual_seed(42)
+
+            train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True,
+                                  num_workers=4, generator=g, worker_init_fn=seed_worker, pin_memory=True)
+            val_dl   = DataLoader(val_dataset,   batch_size=32, shuffle=False,
+                                  num_workers=4, pin_memory=True)
+            test_dl  = DataLoader(test_dataset,  batch_size=32, shuffle=False,
+                                  num_workers=4, pin_memory=True)
+
+            model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
+            model.apply(init_weights_xavier)
+
+            trained_model, train_acc = training_loop_with_val(
+                model, train_dl, val_dl,
+                epochs=epochs, lr=lr, patience=patience, subject=subject
+            )
+
+            test_acc = evaluate(trained_model, test_dl)
+            test_subject_accuracies.append(test_acc)
+            models_per_subject.append(trained_model)
+
+            print(f"Subject {subject} | Train: {train_acc:.4f} | Test: {test_acc:.4f}")
+
+            mlflow.log_metric(f'subject_{subject}_test_accuracy', test_acc)
+
+        mean_acc = np.mean(test_subject_accuracies)
+        std_acc  = np.std(test_subject_accuracies)
+        print(f"\nMean Within-Subject Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
+        mlflow.log_metric('mean_accuracy', mean_acc)
+        mlflow.log_metric('std_accuracy',  std_acc)
+
     return models_per_subject, test_subject_accuracies
