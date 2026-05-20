@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.linalg
 import copy
 
 def laplacian_filter(X, channels, neighbours, use_multiband=False):
@@ -43,4 +44,28 @@ def normalize_trial(X):
     normalized = (X - mean) / (std + 1e-8)
 
     return normalized
+
+
+def euclidean_alignment(X):
+    covs = np.array([x @ x.T / x.shape[-1] for x in X])
+    R_mean = covs.mean(axis=0)
+    
+    R_inv_sqrt = np.linalg.inv(scipy.linalg.sqrtm(R_mean)).real
+    
+    return np.array([R_inv_sqrt @ x for x in X])
+
+
+def apply_ea_loso(X, subjects):
+    X_aligned = X.copy()
+    for subj in np.unique(subjects):
+        mask = subjects == subj
+        X_aligned[mask] = euclidean_alignment(X[mask])
+    return X_aligned
+
+
+def apply_ea_loso_multiband(X, subjects):
+    X_aligned = X.copy()
+    for b in range(X.shape[1]):
+        X_aligned[:, b, :, :] = apply_ea_loso(X[:, b, :, :], subjects)
+    return X_aligned
 

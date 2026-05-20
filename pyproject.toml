@@ -13,5 +13,7 @@ dependencies = [
     "torch",
     "tqdm",
     "mlflow",
-    "mne"
+    "mne",
+    "sktime>=0.40.1",
+    "numba>=0.65.1",
 ]

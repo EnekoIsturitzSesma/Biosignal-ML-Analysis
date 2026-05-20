@@ -1,89 +1,136 @@
+import random
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-import numpy as np
-from sklearn.model_selection import LeaveOneGroupOut
+from sklearn.model_selection import LeaveOneGroupOut, train_test_split
 from tqdm import tqdm
-import random
 import mlflow
 import mlflow.pytorch
 
-import sys
-import os
-
-sys.path.append(os.path.abspath(os.path.join('..')))
-
-from src.preprocess import laplacian_filter, normalize_trial
+from src.preprocess import laplacian_filter, normalize_trial, apply_ea_loso, apply_ea_loso_multiband, euclidean_alignment
 from models.EEGNet import EEGNet
 
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark     = False
+
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+SEED   = 42
+
+
+
 def seed_worker(worker_id):
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
+    seed = torch.initial_seed() % 2**32
+    np.random.seed(seed)
+    random.seed(seed)
 
 
-torch.backends.cudnn.deterministic = True  
-torch.backends.cudnn.benchmark     = False 
+def apply_max_norm(model, max_val=1.0):
+    for name, param in model.named_parameters():
+        if 'weight' in name and param.ndim > 1:
+            if any(k in name for k in ('TemporalConv', 'DepthSpatialConv', 'FC')):
+                param.data.copy_(torch.renorm(param.data, p=2, dim=0, maxnorm=max_val))
+
+
+def init_xavier(m):
+    if isinstance(m, (nn.Conv2d, nn.Linear)):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+
+
+def make_loader(X, y, transforms, augment, batch_size=32, shuffle=True):
+    ds = EEGDataset(X, y, transforms=transforms, augment=augment)
+    g  = torch.Generator()
+    g.manual_seed(SEED)
+    return DataLoader(
+        ds, batch_size=batch_size, shuffle=shuffle,
+        num_workers=4,
+        generator=g                if shuffle else None,
+        worker_init_fn=seed_worker if shuffle else None,
+        pin_memory=True,
+    )
+
+
+def build_model(channels, samples, num_classes, f1=8, D=2, dropout=0.4):
+    model = EEGNet(channels, samples, num_classes, f1=f1, D=D, dropout_rate=dropout)
+    model.apply(init_xavier)
+    return model
+
+
+def val_split_stratified(X, y, val_size=0.15):
+    idx = np.arange(len(y))
+    tr_idx, val_idx = train_test_split(
+        idx, test_size=val_size, stratify=y, random_state=SEED
+    )
+    return tr_idx, val_idx
+
 
 
 class EEGDataset(Dataset):
+
     def __init__(self, X, y, transforms=None, augment=False):
-        self.X = X
-        self.y = y
-        self.transforms = transforms
-        self.augment = augment
-        
+        self.X          = X
+        self.y          = y
+        self.transforms = transforms or []
+        self.augment    = augment
+
         if 'multiband' in self.transforms or 'mu_band' in self.transforms:
             self.channels = self.X.shape[2]
         else:
             self.channels = self.X.shape[1]
 
+        if 'multiband' in self.transforms:
+            assert self.X.ndim == 4, (
+                f"Transform 'multiband' requires shape (trials, bands, channels, samples), "
+                f"received {self.X.shape}. Load data with use_multiband=True."
+            )
+
         if 'laplacian' in self.transforms:
             if self.channels == 22:
-                self.channels_laplace = [7,11] # C3 and C4
-                self.c3_neighbours = [1,6,8,13]
-                self.c4_neighbours = [5,10,12,17]
+                self.ch_lap   = [7, 11]
+                self.c3_neigh = [1, 6, 8, 13]
+                self.c4_neigh = [5, 10, 12, 17]
             else:
-                self.channels_laplace = [3,7] # C3 and C4
-                self.c3_neighbours = [0,2,4,9]
-                self.c4_neighbours = [1,6,8,10]
-            
+                self.ch_lap   = [3, 7]
+                self.c3_neigh = [0, 2, 4, 9]
+                self.c4_neigh = [1, 6, 8, 10]
 
     def __len__(self):
         return len(self.X)
 
     def __getitem__(self, idx):
-        x = self.X[idx]
+        x = self.X[idx].copy()
 
         if 'multiband' in self.transforms and 'laplacian' in self.transforms:
-            bands, channels, samples = x.shape
-
-            processed_bands = []
-            for band in range(bands):
-                band_data = x[band]
-                band_data = np.expand_dims(band_data, axis=0)
-                band_data = laplacian_filter(band_data, self.channels_laplace, [self.c3_neighbours, self.c4_neighbours])
-                band_data = band_data.squeeze(0)
-                processed_bands.append(band_data)
-
-            x = np.concatenate(processed_bands, axis=0)
-
+            processed = []
+            for b in range(x.shape[0]):
+                bd = laplacian_filter(
+                    x[b][np.newaxis], self.ch_lap,
+                    [self.c3_neigh, self.c4_neigh]
+                ).squeeze(0)
+                processed.append(bd)
+            x = np.concatenate(processed, axis=0)
         else:
             if 'mu_band' in self.transforms:
                 x = x[0]
-            
+            if 'multiband' in self.transforms and 'laplacian' not in self.transforms:
+                bands, ch, samp = x.shape
+                x = x.reshape(bands * ch, samp)
             if 'laplacian' in self.transforms:
-                x = np.expand_dims(x, axis=0)
-                x = laplacian_filter(x, self.channels_laplace, [self.c3_neighbours, self.c4_neighbours])
-                x = x.squeeze(0)
+                x = laplacian_filter(
+                    x[np.newaxis], self.ch_lap,
+                    [self.c3_neigh, self.c4_neigh]
+                ).squeeze(0)
 
         if self.augment:
-            x = self._augment(x.numpy() if isinstance(x, torch.Tensor) else x)
+            x = self._augment(x)
 
         x = normalize_trial(x)
-        x = torch.tensor(x, dtype=torch.float32)
-        y = torch.tensor(self.y[idx], dtype=torch.long)
-        return x, y
+        return (
+            torch.tensor(x, dtype=torch.float32),
+            torch.tensor(self.y[idx], dtype=torch.long),
+        )
 
     def _augment(self, x):
         if np.random.rand() < 0.3:
@@ -91,316 +138,224 @@ class EEGDataset(Dataset):
         if np.random.rand() < 0.3:
             x = x * np.random.uniform(0.92, 1.08)
         if np.random.rand() < 0.2:
-            shift = np.random.randint(-3, 3)
-            x = np.roll(x, shift, axis=-1)
+            x = np.roll(x, np.random.randint(-3, 3), axis=-1)
         if np.random.rand() < 0.2:
             ch = np.random.randint(0, x.shape[0])
-            x = x.copy()
+            x  = x.copy()
             x[ch] = 0
         return x
 
 
-def apply_max_norm(model, max_val=1.0):
-    for name, param in model.named_parameters():
-        if 'weight' in name and param.ndim > 1:
-            if 'TemporalConv' in name or 'DepthSpatialConv' in name or 'FC' in name:
-                param.data.copy_(torch.renorm(param.data, p=2, dim=0, maxnorm=max_val))
 
-
-def init_weights_xavier(m):
-    if isinstance(m, nn.Conv2d):
-        nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
-            
-    elif isinstance(m, nn.Linear):
-        nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            nn.init.zeros_(m.bias)
-
-
-def training_loop(model, train_dl, epochs=100, lr=0.0005, patience=20, subject=None):
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6) 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
- 
-    best_train_loss = float('inf')
-    best_train_acc  = 0.0
-    best_model_state = None
-    patience_counter = 0
- 
-    epoch_bar = tqdm(range(epochs), desc="Training", leave=False)
- 
-    for epoch in epoch_bar:
-        model.train()
-        train_loss    = 0.0
-        train_correct = 0
- 
-        for batch_x, batch_y in train_dl:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
- 
-            optimizer.zero_grad()
-            output = model(batch_x)
-            loss = criterion(output, batch_y)
-            loss.backward()
-            optimizer.step()
-            apply_max_norm(model, max_val=1.0)
- 
-            train_loss += loss.item() * batch_x.size(0)
-            _, predicted = torch.max(output, 1)
-            train_correct += (predicted == batch_y).sum().item()
- 
-        train_loss /= len(train_dl.dataset)
-        train_acc   = train_correct / len(train_dl.dataset)
-
-        mlflow.log_metric(f"train_loss_{subject}", train_loss, step=epoch)
-        mlflow.log_metric(f"train_acc_{subject}",  train_acc,  step=epoch)
- 
-        scheduler.step()
- 
-        epoch_bar.set_postfix({
-            "Train Loss": f"{train_loss:.4f}",
-            "Train Acc":  f"{train_acc:.3f}",
-            "LR":         f"{optimizer.param_groups[0]['lr']:.6f}"
-        })
- 
-        if train_loss < best_train_loss:
-            best_train_loss  = train_loss
-            best_train_acc   = train_acc
-            best_model_state = model.state_dict()
-            patience_counter = 0
-        else:
-            patience_counter += 1
- 
-        if patience_counter >= patience:
-            epoch_bar.write(f"Early stopping in epoch {epoch}. "
-                            f"Best train loss: {best_train_loss:.4f}")
-            break
- 
-    if best_model_state is not None:
-        model.load_state_dict(best_model_state)
- 
-    return model, best_train_acc
- 
- 
-def evaluate(model, test_dl):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    model.eval()
- 
-    correct = 0
-    with torch.no_grad():
-        for batch_x, batch_y in test_dl:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            _, predicted = torch.max(model(batch_x), 1)
-            correct += (predicted == batch_y).sum().item()
- 
-    return correct / len(test_dl.dataset)
- 
- 
-def train_model_cv(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=20, augment=False):
-
-    np.random.seed(42)
-    torch.manual_seed(42)
-    random.seed(42)
- 
-    if len(X.shape) == 3:
-        _, channels, samples = X.shape
-    else:
-        _, _, channels, samples = X.shape
- 
-    if 'multiband' in transforms:
-        channels = channels * 2
- 
-    models_per_subject = []
-
-    run_name = f"EEGNet_{channels}_{'_'.join(transforms)}_{'aug' if augment else 'noaug'}"
- 
-    mlflow.set_experiment('BCI_EEGNet')
- 
-    with mlflow.start_run(run_name=run_name):
- 
-        mlflow.log_param("epochs",     epochs)
-        mlflow.log_param("lr",         lr)
-        mlflow.log_param("patience",   patience)
-        mlflow.log_param("transforms", transforms)
-        mlflow.log_param("augment", augment)
- 
-        logo = LeaveOneGroupOut()
-        test_subject_accuracies = []
- 
-        for i, (train_index, test_index) in enumerate(logo.split(X, y, subjects)):
-
-            subject = subjects[test_index][0]
- 
-            X_train, X_test = X[train_index], X[test_index]
-            y_train, y_test = y[train_index], y[test_index]
- 
-            train_dataset = EEGDataset(X_train, y_train, transforms=transforms, augment=augment)
-            test_dataset  = EEGDataset(X_test,  y_test,  transforms=transforms, augment=False)
-
-            g = torch.Generator()
-            g.manual_seed(42)
- 
-            train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4, generator=g, worker_init_fn=seed_worker, pin_memory=True)
-            test_dl  = DataLoader(test_dataset,  batch_size=32, shuffle=False, num_workers=4, pin_memory=True)
- 
-            model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
-            model.apply(init_weights_xavier)
- 
-            trained_model, train_acc = training_loop(model, train_dl, epochs=epochs, lr=lr, patience=patience, subject=subject)
- 
-            test_acc = evaluate(trained_model, test_dl)
- 
-            test_subject_accuracies.append(test_acc)
-            models_per_subject.append(trained_model)
- 
-            subject = subjects[test_index][0]
-            print(f"Fold {i+1} | Subject {subject} | "
-                  f"Train Acc: {train_acc:.4f} | Test Acc: {test_acc:.4f}")
- 
-            mlflow.log_metric(f'subject_{subject}_train_accuracy', train_acc)
-            mlflow.log_metric(f'subject_{subject}_test_accuracy',  test_acc)
-            mlflow.pytorch.log_model(trained_model, artifact_path=f'model_subject_{subject}')
-            
- 
-        mean_acc = np.mean(test_subject_accuracies)
-        std_acc  = np.std(test_subject_accuracies)
-        print(f"\nMean Subject Test Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
- 
-        mlflow.log_metric('mean_accuracy', mean_acc)
-        mlflow.log_metric('std_accuracy',  std_acc)
- 
-    return models_per_subject, test_subject_accuracies
-
-
-
-def training_loop_with_val(model, train_dl, val_dl, epochs=100, lr=0.0005, patience=20, subject=None):
+def training_loop(model, train_dl, val_dl=None, epochs=300, lr=0.0005, patience=40, subject=None, log_prefix=''):
 
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-    device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    
+    use_val = val_dl is not None
 
-    best_val_acc     = 0.0
-    best_model_state = None
-    patience_counter = 0
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='max' if use_val else 'min', 
+        factor=0.5,
+        patience=patience // 2,
+        min_lr=1e-6,
+    )
 
-    for epoch in (bar := tqdm(range(epochs), desc="Training", leave=False)):
+    model.to(DEVICE)
+
+    use_val     = val_dl is not None
+    best_metric = 0.0 if use_val else float('inf')
+    best_state  = None
+    counter     = 0
+
+    for epoch in (bar := tqdm(range(epochs), desc=f'S{subject}', leave=False)):
+
         model.train()
-        for batch_x, batch_y in train_dl:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+        t_loss = t_correct = 0
+        for bx, by in train_dl:
+            bx, by = bx.to(DEVICE), by.to(DEVICE)
             optimizer.zero_grad()
-            loss = criterion(model(batch_x), batch_y)
+            out  = model(bx)
+            loss = criterion(out, by)
             loss.backward()
             optimizer.step()
-            apply_max_norm(model, max_val=1.0)
+            apply_max_norm(model)
+            t_loss    += loss.item() * bx.size(0)
+            t_correct += (out.argmax(1) == by).sum().item()
 
-        scheduler.step()
+        t_loss /= len(train_dl.dataset)
+        t_acc   = t_correct / len(train_dl.dataset)
 
-        val_acc = evaluate(model, val_dl)   
+        mlflow.log_metric(f'{log_prefix}train_loss_s{subject}', t_loss, step=epoch)
+        mlflow.log_metric(f'{log_prefix}train_acc_s{subject}',  t_acc,  step=epoch)
 
-        mlflow.log_metric(f"val_acc_{subject}", val_acc, step=epoch)
-        bar.set_postfix({"Val Acc": f"{val_acc:.3f}"})
-
-        if val_acc > best_val_acc:
-            best_val_acc     = val_acc
-            best_model_state = model.state_dict()
-            patience_counter = 0
+        if use_val:
+            val_acc = evaluate(model, val_dl)
+            mlflow.log_metric(f'{log_prefix}val_acc_s{subject}', val_acc, step=epoch)
+            bar.set_postfix(train=f'{t_acc:.3f}', val=f'{val_acc:.3f}')
+            improved = val_acc > best_metric
+            current  = val_acc
         else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                bar.write(f"Early stopping época {epoch}. Best val: {best_val_acc:.4f}")
+            bar.set_postfix(loss=f'{t_loss:.4f}', acc=f'{t_acc:.3f}')
+            improved = t_loss < best_metric
+            current  = t_loss
+
+        scheduler.step(current)
+
+
+        if improved:
+            best_metric = current
+            best_state  = model.state_dict()
+            counter     = 0
+        else:
+            counter += 1
+            if counter >= patience:
+                bar.write(
+                    f'Early stop epoch {epoch} | '
+                    f'best {"val_acc" if use_val else "train_loss"}: {best_metric:.4f}'
+                )
                 break
 
-    model.load_state_dict(best_model_state)
-    return model, best_val_acc
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    return model, best_metric
+
+
+@torch.no_grad()
+def evaluate(model, dl):
+    model.to(DEVICE).eval()
+    correct = sum(
+        (model(bx.to(DEVICE)).argmax(1) == by.to(DEVICE)).sum().item()
+        for bx, by in dl
+    )
+    return correct / len(dl.dataset)
 
 
 
+def run_loso(X, y, subjects, cfg, num_classes, run_name, val_size=0.15):
+    transforms = cfg['transforms']
+    augment    = cfg['augment']
+    lr         = cfg.get('lr',       0.0003)
+    epochs     = cfg.get('epochs',   300)
+    patience   = cfg.get('patience', 40)
 
-def train_model_within_subject(X, y, subjects, transforms, epochs=100, lr=0.0003, patience=20, augment=False):
-    
-    np.random.seed(42)
-    torch.manual_seed(42)
-    random.seed(42)
-
-    if len(X.shape) == 3:
+    if X.ndim == 3:
         _, channels, samples = X.shape
     else:
         _, _, channels, samples = X.shape
 
     if 'multiband' in transforms:
-        channels = channels * 2
+        channels *= 2
+        X = apply_ea_loso_multiband(X, subjects)
+    else:
+        X = apply_ea_loso(X, subjects)
 
-    models_per_subject     = []
-    test_subject_accuracies = []
+    mlflow.set_experiment('BCI_EEGNet_LOSO')
 
-    run_name = f"EEGNet_within_{channels}_{'_'.join(transforms)}_{'aug' if augment else 'noaug'}"
+    with mlflow.start_run(run_name=run_name):
+        mlflow.log_params({**cfg, 'num_classes': num_classes, 'val_size': val_size})
+
+        accs = {}
+        for fold, (tr_idx, te_idx) in enumerate(LeaveOneGroupOut().split(X, y, subjects)):
+
+            subject = subjects[te_idx][0]
+
+            tr_tr_idx, tr_val_idx = val_split_stratified(
+                X[tr_idx], y[tr_idx], val_size=val_size
+            )
+            X_tr  = X[tr_idx][tr_tr_idx]
+            y_tr  = y[tr_idx][tr_tr_idx]
+            X_val = X[tr_idx][tr_val_idx]
+            y_val = y[tr_idx][tr_val_idx]
+
+            train_dl = make_loader(X_tr,      y_tr,      transforms, augment)
+            val_dl   = make_loader(X_val,     y_val,     transforms, False, shuffle=False)
+            test_dl  = make_loader(X[te_idx], y[te_idx], transforms, False, shuffle=False)
+
+            model, best_val = training_loop(build_model(channels, samples, num_classes), train_dl, val_dl=val_dl, epochs=epochs, lr=lr, patience=patience, subject=subject,)
+            test_acc = evaluate(model, test_dl)
+            accs[subject] = test_acc
+
+            print(f'  Fold {fold+1:02d} | Subject {subject} | '
+                  f'Train {len(y_tr)} | Val {len(y_val)} | '
+                  f'Best Val {best_val:.4f} | Test {test_acc:.4f}')
+            mlflow.log_metric(f's{subject}_val_acc',  best_val)
+            mlflow.log_metric(f's{subject}_test_acc', test_acc)
+
+        mean_acc = np.mean(list(accs.values()))
+        std_acc  = np.std(list(accs.values()))
+        print(f'  → Mean: {mean_acc:.4f} ± {std_acc:.4f}\n')
+        mlflow.log_metric('mean_acc', mean_acc)
+        mlflow.log_metric('std_acc',  std_acc)
+
+    return {'mean': mean_acc, 'std': std_acc, 'per_subject': accs}
+
+
+def run_within_subject_T_to_E(X_train, y_train, subjects_train, X_eval,  y_eval,  subjects_eval, cfg, num_classes, run_name, val_size=0.20):
+    transforms = cfg['transforms']
+    augment    = cfg['augment']
+    lr         = cfg.get('lr',       0.0003)
+    epochs     = cfg.get('epochs',   300)
+    patience   = cfg.get('patience', 40)
+
+    if X_train.ndim == 3:
+        _, channels, samples = X_train.shape
+    else:
+        _, _, channels, samples = X_train.shape
+
+    if 'multiband' in transforms:
+        channels *= 2
+
     mlflow.set_experiment('BCI_EEGNet_within')
 
     with mlflow.start_run(run_name=run_name):
+        mlflow.log_params({**cfg, 'num_classes': num_classes, 'val_size': val_size})
 
-        mlflow.log_params({
-            "epochs": epochs, "lr": lr,
-            "patience": patience, "transforms": transforms, "augment": augment,
-        })
+        accs = {}
+        for subject in np.unique(subjects_train):
+            mask = subjects_train == subject
+            X_s_raw = X_train[mask].copy()
+            
+            if X_s_raw.ndim == 4:
+                X_s = apply_ea_loso_multiband(X_s_raw, np.zeros(len(X_s_raw)))
+            else:
+                X_s = euclidean_alignment(X_s_raw)
 
-        for subject in np.unique(subjects):
+            y_s  = y_train[mask]
 
-            mask       = subjects == subject
-            X_s, y_s   = X[mask], y[mask]
+            tr_idx, val_idx = val_split_stratified(X_s, y_s, val_size=val_size)
+            X_tr,  y_tr  = X_s[tr_idx],  y_s[tr_idx]
+            X_val, y_val = X_s[val_idx], y_s[val_idx]
 
-            n          = len(X_s)
-            idx        = np.random.permutation(n)
-            train_end  = int(0.60 * n)
-            val_end    = int(0.80 * n)
+            te_mask = subjects_eval == subject
+            X_te_raw = X_eval[te_mask].copy()
+    
+            if X_te_raw.ndim == 4:
+                X_te = apply_ea_loso_multiband(X_te_raw, np.zeros(len(X_te_raw)))
+            else:
+                X_te = euclidean_alignment(X_te_raw)
+            y_te = y_eval[te_mask]
 
-            train_idx  = idx[:train_end]
-            val_idx    = idx[train_end:val_end]
-            test_idx   = idx[val_end:]
+            train_dl = make_loader(X_tr,  y_tr,  transforms, augment)
+            val_dl   = make_loader(X_val, y_val, transforms, False, shuffle=False)
+            test_dl  = make_loader(X_te,  y_te,  transforms, False, shuffle=False)
 
-            X_train, y_train = X_s[train_idx], y_s[train_idx]
-            X_val,   y_val   = X_s[val_idx],   y_s[val_idx]
-            X_test,  y_test  = X_s[test_idx],  y_s[test_idx]
+            model, best_val = training_loop(build_model(channels, samples, num_classes), train_dl, val_dl=val_dl, epochs=epochs, lr=lr, patience=patience, subject=subject, log_prefix='within_',)
+            test_acc = evaluate(model, test_dl)
+            accs[subject] = test_acc
 
-            train_dataset = EEGDataset(X_train, y_train, transforms=transforms, augment=augment)
-            val_dataset   = EEGDataset(X_val,   y_val,   transforms=transforms, augment=False)
-            test_dataset  = EEGDataset(X_test,  y_test,  transforms=transforms, augment=False)
+            print(f'  Subject {subject} | '
+                  f'Train {len(y_tr)} | Val {len(y_val)} | '
+                  f'Best Val {best_val:.4f} | Eval(E) {test_acc:.4f}')
+            mlflow.log_metric(f's{subject}_val_acc',  best_val)
+            mlflow.log_metric(f's{subject}_eval_acc', test_acc)
 
-            g = torch.Generator()
-            g.manual_seed(42)
+        mean_acc = np.mean(list(accs.values()))
+        std_acc  = np.std(list(accs.values()))
+        print(f'  → Mean: {mean_acc:.4f} ± {std_acc:.4f}\n')
+        mlflow.log_metric('mean_acc', mean_acc)
+        mlflow.log_metric('std_acc',  std_acc)
 
-            train_dl = DataLoader(train_dataset, batch_size=32, shuffle=True,
-                                  num_workers=4, generator=g, worker_init_fn=seed_worker, pin_memory=True)
-            val_dl   = DataLoader(val_dataset,   batch_size=32, shuffle=False,
-                                  num_workers=4, pin_memory=True)
-            test_dl  = DataLoader(test_dataset,  batch_size=32, shuffle=False,
-                                  num_workers=4, pin_memory=True)
-
-            model = EEGNet(channels, samples, 2, f1=32, D=4, dropout_rate=0.4)
-            model.apply(init_weights_xavier)
-
-            trained_model, train_acc = training_loop_with_val(
-                model, train_dl, val_dl,
-                epochs=epochs, lr=lr, patience=patience, subject=subject
-            )
-
-            test_acc = evaluate(trained_model, test_dl)
-            test_subject_accuracies.append(test_acc)
-            models_per_subject.append(trained_model)
-
-            print(f"Subject {subject} | Train: {train_acc:.4f} | Test: {test_acc:.4f}")
-
-            mlflow.log_metric(f'subject_{subject}_test_accuracy', test_acc)
-
-        mean_acc = np.mean(test_subject_accuracies)
-        std_acc  = np.std(test_subject_accuracies)
-        print(f"\nMean Within-Subject Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
-        mlflow.log_metric('mean_accuracy', mean_acc)
-        mlflow.log_metric('std_accuracy',  std_acc)
-
-    return models_per_subject, test_subject_accuracies
+    return {'mean': mean_acc, 'std': std_acc, 'per_subject': accs}
